@@ -6,19 +6,16 @@
         <artifactId>quarkus-build-parent</artifactId>
         <groupId>io.quarkus</groupId>
         <version>999-SNAPSHOT</version>
-	<relativePath>../../build-parent/pom.xml</relativePath>
+        <relativePath>../../../build-parent/pom.xml</relativePath>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>quarkus-panache-parent</artifactId>
-    <name>Quarkus - Panache</name>
+    <artifactId>quarkus-elasticsearch-panache-parent</artifactId>
+    <name>Quarkus - Elasticsearch with Panache - Parent</name>
     <packaging>pom</packaging>
     <modules>
-        <module>panache-common</module>
-        <module>hibernate-orm-panache</module>
-        <module>mongodb-panache</module>
-        <module>panacheql</module>
-        <module>elasticsearch-panache</module>
+        <module>runtime</module>
+        <module>deployment</module>
     </modules>
 
 
