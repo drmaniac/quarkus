@@ -1,8 +1,8 @@
 package io.quarkus.elasticsearch.panache.deployment;
 
+import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.Set;
-
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
 
@@ -23,6 +23,9 @@ import io.quarkus.elasticsearch.panache.PanacheElasticsearchEntityBase;
 import io.quarkus.elasticsearch.panache.runtime.ElasticsearchConfig;
 import io.quarkus.elasticsearch.panache.runtime.ElasticsearchProducer;
 import io.quarkus.elasticsearch.panache.runtime.ElasticsearchRecorder;
+import io.quarkus.jackson.spi.JacksonModuleBuildItem;
+import io.quarkus.jsonb.spi.JsonbDeserializerBuildItem;
+import io.quarkus.jsonb.spi.JsonbSerializerBuildItem;
 import io.quarkus.panache.common.deployment.PanacheEntityClassesBuildItem;
 import io.quarkus.panache.common.deployment.PanacheFieldAccessEnhancer;
 
@@ -41,6 +44,25 @@ public class ElasticsearchProcessor {
     @BuildStep
     FeatureBuildItem featureBuildItem() {
         return new FeatureBuildItem("elasticsearch-panache");
+    }
+    
+    @BuildStep
+    void registerJsonbSerDeser(BuildProducer<JsonbSerializerBuildItem> jsonbSerializers,
+            BuildProducer<JsonbDeserializerBuildItem> jsonbDeserializers) {
+        jsonbSerializers
+                .produce(new JsonbSerializerBuildItem(io.quarkus.elasticsearch.panache.jsonb.LocalDateSerializer.class.getName()));
+        jsonbDeserializers
+                .produce(new JsonbDeserializerBuildItem(io.quarkus.elasticsearch.panache.jsonb.LocalDateDeserializer.class.getName()));
+    }
+
+    @BuildStep
+    void registerJacksonSerDeser(BuildProducer<JacksonModuleBuildItem> customSerDeser) {
+        customSerDeser.produce(
+                new JacksonModuleBuildItem.Builder("ObjectIdModule")
+                        .add(io.quarkus.elasticsearch.panache.jackson.LocalDateSerializer.class.getName(),
+                                io.quarkus.elasticsearch.panache.jackson.LocalDateDeserializer.class.getName(),
+                                LocalDate.class.getName())
+                        .build());
     }
 
     @BuildStep
