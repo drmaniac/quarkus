@@ -3,6 +3,7 @@ package io.quarkus.elasticsearch.panache.deployment;
 import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.Set;
+
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
 
@@ -45,14 +46,16 @@ public class ElasticsearchProcessor {
     FeatureBuildItem featureBuildItem() {
         return new FeatureBuildItem("elasticsearch-panache");
     }
-    
+
     @BuildStep
     void registerJsonbSerDeser(BuildProducer<JsonbSerializerBuildItem> jsonbSerializers,
             BuildProducer<JsonbDeserializerBuildItem> jsonbDeserializers) {
         jsonbSerializers
-                .produce(new JsonbSerializerBuildItem(io.quarkus.elasticsearch.panache.jsonb.LocalDateSerializer.class.getName()));
+                .produce(new JsonbSerializerBuildItem(
+                        io.quarkus.elasticsearch.panache.jsonb.LocalDateSerializer.class.getName()));
         jsonbDeserializers
-                .produce(new JsonbDeserializerBuildItem(io.quarkus.elasticsearch.panache.jsonb.LocalDateDeserializer.class.getName()));
+                .produce(new JsonbDeserializerBuildItem(
+                        io.quarkus.elasticsearch.panache.jsonb.LocalDateDeserializer.class.getName()));
     }
 
     @BuildStep
