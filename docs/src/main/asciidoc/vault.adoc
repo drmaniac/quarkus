@@ -11,6 +11,7 @@ include::./attributes.adoc[]
 :root-token: s.5VUS8pte13RqekCB2fmMT3u2
 :client-token: s.s93BVzJPzBiIGuYJHBTkG8Uw
 :extension-status: preview
+:vault-auth-guide: link:vault-auth[Vault Authentication guide]
 
 https://www.vaultproject.io/[HashiCorp Vault] is a multi-purpose tool aiming at protecting sensitive data, such as
 credentials, certificates, access tokens, encryption keys, ... In the context of Quarkus,
@@ -177,16 +178,7 @@ vault write auth/userpass/users/bob password=sinclair policies=vault-quickstart-
 
 [NOTE]
 ====
-The Vault extension also supports alternate authentication methods such as:
-
- - https://www.vaultproject.io/docs/auth/approle.html[approle]
- - https://www.vaultproject.io/docs/auth/kubernetes.html[kubernetes] when deploying the Quarkus application
-and Vault into Kubernetes
-
-It is also possible to directly pass a `quarkus.vault.authentication.client-token`, which will bypass the authentication process.
-This could be handy in development where revocation and ttl are not a concern.
-
-Check the extension configuration documentation for more information.
+Quarkus supports additional Vault Authentication methods. Check the {vault-auth-guide} for details.
 ====
 
 To check that the configuration is correct, try logging in:
@@ -491,6 +483,44 @@ You should see:
 ----
 {password=connor}
 ----
+
+[[totp]]
+== TOTP Secrets Engine
+
+The https://www.vaultproject.io/docs/secrets/totp/[Vault TOTP secrets engine] generates time-based credentials according to the TOTP standard.
+
+Vault TOTP supports both the generator scenario (like Google Authenticator) and the provider scenario (like the Google.com sign in).
+
+The Vault extension integrates with the Vault TOTP secret engine by providing an `io.quarkus.vault.VaultTOTPSecretEngine` class.
+
+[source, java]
+----
+import io.quarkus.vault.VaultTOTPSecretEngine;
+import io.quarkus.vault.secrets.totp.CreateKeyParameters;
+import io.quarkus.vault.secrets.totp.KeyConfiguration;
+import io.quarkus.vault.secrets.totp.KeyDefinition;
+
+@Inject
+VaultTOTPSecretEngine vaultTOTPSecretEngine;
+
+CreateKeyParameters createKeyParameters = new CreateKeyParameters("Google", "test@gmail.com");
+createKeyParameters.setPeriod("30m");
+
+/** Google Authentication logic */
+
+final Optional<KeyDefinition> myKey = vaultTOTPSecretEngine
+                                            .createKey("my_key_2", createKeyParameters); // <1> <2>
+
+final String keyCode = vaultTOTPSecretEngine.generateCode("my_key_2"); // <3>
+
+/** Google Login logic */
+
+boolean valid = vaultTOTPSecretEngine.validateCode("my_key_2", keyCode); // <4>
+----
+<1> Create a key to generate codes.
+<2> `KeyDefinition` class contains an embeddable base64 QR code that can be used by third-party code generators.
+<3> Generates a code (not using third-party generator).
+<4> Validates that the code is valid.
 
 == Vault Health Check
 

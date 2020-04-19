@@ -14,10 +14,10 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/autoissuelabeler.yml'
       - '.github/boring-cyborg.yml'
-      - '.github/NativeBuildReport.kts'
+      - '.github/NativeBuildReport.java'
       - '.dependabot/**'
   pull_request:
-    types: [assigned, opened, synchronize, reopened, ready_for_review, edited]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths-ignore:
       - 'docs/src/main/asciidoc/**'
       - 'README.md'
@@ -28,7 +28,7 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/autoissuelabeler.yml'
       - '.github/boring-cyborg.yml'
-      - '.github/NativeBuildReport.kts'
+      - '.github/NativeBuildReport.java'
       - '.dependabot/**'
 
 env:
@@ -156,11 +156,22 @@ jobs:
           sudo service mysql stop || true
           docker run --rm --publish 127.0.0.1:3306:3306 --name build-mysql -e MYSQL_USER=$DB_USER -e MYSQL_PASSWORD=$DB_PASSWORD -e MYSQL_DATABASE=$DB_NAME -e MYSQL_RANDOM_ROOT_PASSWORD=true -e MYSQL_DATABASE=hibernate_orm_test -d mysql:5 --skip-ssl
       - uses: actions/checkout@v2
+
       - name: Set up JDK ${{ matrix.java-version }}
         # Uses sha for added security since tags can be updated
         uses: joschi/setup-jdk@b9cc6eabf7e7e3889766b5cee486f874c9e1bd2d
+        if: matrix.java-version != '8'
         with:
           java-version: ${{ matrix.java-version }}
+
+      - name: Set up JDK ${{ matrix.java-version }}
+        # Uses sha for added security since tags can be updated
+        uses: joschi/setup-jdk@b9cc6eabf7e7e3889766b5cee486f874c9e1bd2d
+        if: matrix.java-version == '8'
+        with:
+          java-version: ${{ matrix.java-version }}
+          release: jdk8u242-b08
+
       - name: Download Maven Repo
         uses: actions/download-artifact@v1
         with:
@@ -348,22 +359,24 @@ jobs:
               amazon-lambda
               amazon-lambda-http
           - category: Messaging
-            timeout: 45
+            timeout: 65
             test-modules: >
               artemis-core
               artemis-jms
               kafka
               kafka-streams
+              reactive-messaging-amqp
           - category: Security1
-            timeout: 30
+            timeout: 40
             keycloak: "true"
             test-modules: >
               elytron-security-oauth2
               elytron-security
               elytron-security-jdbc
-              elytron-undertow 
+              elytron-undertow
+              elytron-security-ldap
           - category: Security2
-            timeout: 50
+            timeout: 60
             keycloak: "true"
             test-modules: >
               elytron-resteasy
@@ -399,7 +412,7 @@ jobs:
               quartz
               qute
           - category: Misc2
-            timeout: 35
+            timeout: 40
             test-modules: >
               tika
               hibernate-validator
@@ -407,6 +420,7 @@ jobs:
               logging-gelf
               bootstrap-config
               optaplanner-jackson
+              optaplanner-jsonb
           # kubernetes-client alone takes 30mn+
           - category: Misc3
             timeout: 50

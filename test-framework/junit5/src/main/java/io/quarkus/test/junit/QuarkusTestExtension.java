@@ -9,9 +9,9 @@ import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,6 +61,7 @@ import io.quarkus.test.common.TestClassIndexer;
 import io.quarkus.test.common.TestResourceManager;
 import io.quarkus.test.common.TestScopeManager;
 import io.quarkus.test.common.http.TestHTTPResourceManager;
+import io.quarkus.test.junit.buildchain.TestBuildChainCustomizerProducer;
 import io.quarkus.test.junit.callback.QuarkusTestAfterEachCallback;
 import io.quarkus.test.junit.callback.QuarkusTestBeforeAllCallback;
 import io.quarkus.test.junit.callback.QuarkusTestBeforeEachCallback;
@@ -106,7 +107,7 @@ public class QuarkusTestExtension
             }
             CuratedApplication curatedApplication = runnerBuilder
                     .setTest(true)
-                    .setProjectRoot(new File("").toPath())
+                    .setProjectRoot(Files.isDirectory(appClassLocation) ? new File("").toPath() : null)
                     .build()
                     .bootstrap();
 
@@ -584,7 +585,9 @@ public class QuarkusTestExtension
             Path testLocation = (Path) stringObjectMap.get(TEST_LOCATION);
             // the index was written by the extension
             Index testClassesIndex = TestClassIndexer.readIndex((Class<?>) stringObjectMap.get(TEST_CLASS));
-            return Collections.singletonList(new Consumer<BuildChainBuilder>() {
+
+            List<Consumer<BuildChainBuilder>> allCustomizers = new ArrayList<>(1);
+            Consumer<BuildChainBuilder> defaultCustomizer = new Consumer<BuildChainBuilder>() {
 
                 private static final int ANNOTATION = 0x00002000;
 
@@ -660,7 +663,16 @@ public class QuarkusTestExtension
                     }
 
                 }
-            });
+            };
+            allCustomizers.add(defaultCustomizer);
+
+            // give other extensions the ability to customize the build chain
+            for (TestBuildChainCustomizerProducer testBuildChainCustomizerProducer : ServiceLoader
+                    .load(TestBuildChainCustomizerProducer.class, this.getClass().getClassLoader())) {
+                allCustomizers.add(testBuildChainCustomizerProducer.produce(testClassesIndex));
+            }
+
+            return allCustomizers;
         }
     }
 }
