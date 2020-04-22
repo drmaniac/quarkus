@@ -61,6 +61,11 @@ public class OidcTenantConfig {
     public Optional<String> jwksPath = Optional.empty();
 
     /**
+     * Relative path of the OIDC end_session_endpoint.
+     */
+    @ConfigItem
+    public Optional<String> endSessionPath = Optional.empty();
+    /**
      * Public key for the local JWT token verification.
      */
     @ConfigItem
@@ -107,6 +112,12 @@ public class OidcTenantConfig {
     @ConfigItem
     public Tls tls = new Tls();
 
+    /**
+     * Logout configuration
+     */
+    @ConfigItem
+    public Logout logout = new Logout();
+
     @ConfigGroup
     public static class Tls {
         public enum Verification {
@@ -135,6 +146,41 @@ public class OidcTenantConfig {
             this.verification = verification;
         }
 
+    }
+
+    @ConfigGroup
+    public static class Logout {
+
+        /**
+         * The relative path of the logout endpoint at the application. If provided, the application is able to initiate the
+         * logout through this endpoint in conformance with the OpenID Connect RP-Initiated Logout specification.
+         */
+        @ConfigItem
+        public Optional<String> path = Optional.empty();
+
+        /**
+         * Relative path of the application endpoint where the user should be redirected to after logging out from the OpenID
+         * Connect Provider.
+         * This endpoint URI must be properly registered at the OpenID Connect Provider as a valid redirect URI.
+         */
+        @ConfigItem
+        public Optional<String> postLogoutPath = Optional.empty();
+
+        public void setPath(Optional<String> path) {
+            this.path = path;
+        }
+
+        public String getPath() {
+            return path.get();
+        }
+
+        public void setPostLogoutPath(Optional<String> postLogoutPath) {
+            this.postLogoutPath = postLogoutPath;
+        }
+
+        public Optional<String> getPostLogoutPath() {
+            return postLogoutPath;
+        }
     }
 
     public Optional<Duration> getConnectionDelay() {
@@ -167,6 +213,14 @@ public class OidcTenantConfig {
 
     public void setJwksPath(String jwksPath) {
         this.jwksPath = Optional.of(jwksPath);
+    }
+
+    public Optional<String> getEndSessionPath() {
+        return endSessionPath;
+    }
+
+    public void setEndSessionPath(String endSessionPath) {
+        this.endSessionPath = Optional.of(endSessionPath);
     }
 
     public Optional<String> getPublicKey() {
@@ -231,6 +285,14 @@ public class OidcTenantConfig {
 
     public void setProxy(Proxy proxy) {
         this.proxy = proxy;
+    }
+
+    public void setLogout(Logout logout) {
+        this.logout = logout;
+    }
+
+    public Logout getLogout() {
+        return logout;
     }
 
     @ConfigGroup
@@ -527,11 +589,14 @@ public class OidcTenantConfig {
         public Optional<List<String>> audience = Optional.empty();
 
         /**
-         * Expiration grace period in seconds. A token expiration time will be reduced by
-         * the value of this property before being compared to the current time.
+         * Life span grace period in seconds.
+         * When checking token expiry, current time is allowed to be later than token expiration time by at most the configured
+         * number of seconds.
+         * When checking token issuance, current time is allowed to be sooner than token issue time by at most the configured
+         * number of seconds.
          */
         @ConfigItem
-        public Optional<Integer> expirationGrace = Optional.empty();
+        public Optional<Integer> lifespanGrace = Optional.empty();
 
         /**
          * Name of the claim which contains a principal name. By default, the 'upn', 'preferred_username' and `sub` claims are
@@ -539,6 +604,17 @@ public class OidcTenantConfig {
          */
         @ConfigItem
         public Optional<String> principalClaim = Optional.empty();
+
+        /**
+         * Refresh expired ID tokens.
+         * If this property is enabled then a refresh token request is performed and, if successful, the local session is
+         * updated with the new set of tokens.
+         * Otherwise, the local session is invalidated as an indication that the session at the OpenID Provider no longer
+         * exists.
+         * This option is only valid when the application is of type {@link ApplicationType#WEB_APP}}.
+         */
+        @ConfigItem
+        public boolean refreshExpired;
 
         public Optional<String> getIssuer() {
             return issuer;
@@ -556,12 +632,12 @@ public class OidcTenantConfig {
             this.audience = Optional.of(audience);
         }
 
-        public Optional<Integer> getExpirationGrace() {
-            return expirationGrace;
+        public Optional<Integer> getLifespanGrace() {
+            return lifespanGrace;
         }
 
-        public void setExpirationGrace(int expirationGrace) {
-            this.expirationGrace = Optional.of(expirationGrace);
+        public void setLifespanGrace(int lifespanGrace) {
+            this.lifespanGrace = Optional.of(lifespanGrace);
         }
 
         public Optional<String> getPrincipalClaim() {
@@ -570,6 +646,14 @@ public class OidcTenantConfig {
 
         public void setPrincipalClaim(String principalClaim) {
             this.principalClaim = Optional.of(principalClaim);
+        }
+
+        public boolean isRefreshExpired() {
+            return refreshExpired;
+        }
+
+        public void setRefreshExpired(boolean refreshExpired) {
+            this.refreshExpired = refreshExpired;
         }
     }
 

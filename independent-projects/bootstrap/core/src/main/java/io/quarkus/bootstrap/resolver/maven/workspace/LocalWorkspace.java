@@ -3,6 +3,8 @@ package io.quarkus.bootstrap.resolver.maven.workspace;
 import io.quarkus.bootstrap.model.AppArtifactCoords;
 import io.quarkus.bootstrap.model.AppArtifactKey;
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -93,23 +95,30 @@ public class LocalWorkspace implements WorkspaceModelResolver, WorkspaceReader {
         if (!Objects.equals(artifact.getClassifier(), lp.getAppArtifact().getClassifier())) {
             if ("tests".equals(artifact.getClassifier())) {
                 //special classifier used for test jars
-                final File file = lp.getTestClassesDir().toFile();
-                if (file.exists()) {
-                    return file;
+                final Path path = lp.getTestClassesDir();
+                if (Files.exists(path)) {
+                    return path.toFile();
                 }
             }
             return null;
         }
         final String type = artifact.getExtension();
         if (type.equals(AppArtifactCoords.TYPE_JAR)) {
-            final File file = lp.getClassesDir().toFile();
-            if (file.exists()) {
-                return file;
+            Path path = lp.getClassesDir();
+            if (Files.exists(path)) {
+                return path.toFile();
+            }
+
+            // it could be a project with no sources/resources, in which case Maven will create an empty JAR
+            // if it has previously been packaged we can return it
+            path = lp.getOutputDir().resolve(lp.getArtifactId() + "-" + lp.getVersion() + ".jar");
+            if (Files.exists(path)) {
+                return path.toFile();
             }
         } else if (type.equals(AppArtifactCoords.TYPE_POM)) {
-            final File file = lp.getDir().resolve("pom.xml").toFile();
-            if (file.exists()) {
-                return file;
+            final Path path = lp.getDir().resolve("pom.xml");
+            if (Files.exists(path)) {
+                return path.toFile();
             }
         }
         return null;

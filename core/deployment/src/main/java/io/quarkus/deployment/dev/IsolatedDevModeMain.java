@@ -72,7 +72,7 @@ public class IsolatedDevModeMain implements BiConsumer<CuratedApplication, Map<S
                                     return;
                                 }
                                 System.out.println("Quarkus application exited with code " + integer);
-                                System.out.println("Press Enter to restart");
+                                System.out.println("Press Enter to restart or Ctrl + C to quit");
                                 try {
                                     while (System.in.read() != '\n') {
                                     }
@@ -119,7 +119,6 @@ public class IsolatedDevModeMain implements BiConsumer<CuratedApplication, Map<S
     public synchronized void restartApp(Set<String> changedResources) {
         restarting = true;
         stop();
-        restarting = false;
         Timing.restart(curatedApplication.getAugmentClassLoader());
         deploymentProblem = null;
         ClassLoader old = Thread.currentThread().getContextClassLoader();
@@ -134,6 +133,7 @@ public class IsolatedDevModeMain implements BiConsumer<CuratedApplication, Map<S
                 log.error("Failed to start quarkus", t);
             }
         } finally {
+            restarting = false;
             Thread.currentThread().setContextClassLoader(old);
         }
     }

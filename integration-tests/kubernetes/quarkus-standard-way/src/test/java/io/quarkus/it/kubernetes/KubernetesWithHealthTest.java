@@ -75,21 +75,19 @@ public class KubernetesWithHealthTest {
                 assertThat(deploymentSpec.getTemplate()).satisfies(t -> {
                     assertThat(t.getSpec()).satisfies(podSpec -> {
                         assertThat(podSpec.getContainers()).hasOnlyOneElementSatisfying(container -> {
-                            assertThat(container.getReadinessProbe()).satisfies(p -> {
+                            assertThat(container.getReadinessProbe()).isNotNull().satisfies(p -> {
                                 assertThat(p.getInitialDelaySeconds()).isEqualTo(0);
                                 assertProbePath(p, "/health/ready");
+
+                                assertNotNull(p.getHttpGet());
+                                assertEquals(p.getHttpGet().getPort().getIntVal(), 9090);
                             });
-                            assertThat(container.getReadinessProbe()).satisfies(probe -> {
-                                assertNotNull(probe.getHttpGet());
-                                assertEquals(probe.getHttpGet().getPort().getIntVal(), 9090);
-                            });
-                            assertThat(container.getLivenessProbe()).satisfies(p -> {
+                            assertThat(container.getLivenessProbe()).isNotNull().satisfies(p -> {
                                 assertThat(p.getInitialDelaySeconds()).isEqualTo(20);
                                 assertProbePath(p, "/health/live");
-                            });
-                            assertThat(container.getLivenessProbe()).satisfies(probe -> {
-                                assertNotNull(probe.getHttpGet());
-                                assertEquals(probe.getHttpGet().getPort().getIntVal(), 9090);
+
+                                assertNotNull(p.getHttpGet());
+                                assertEquals(p.getHttpGet().getPort().getIntVal(), 9090);
                             });
                         });
                     });
