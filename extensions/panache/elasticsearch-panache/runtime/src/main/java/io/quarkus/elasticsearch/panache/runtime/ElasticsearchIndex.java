@@ -10,6 +10,7 @@ import org.jboss.logging.Logger;
 
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import io.quarkus.elasticsearch.panache.PanacheElasticsearchEntityBase;
 
@@ -31,15 +32,13 @@ public class ElasticsearchIndex {
      * @param document to put
      */
     public void persist(final PanacheElasticsearchEntityBase entity) {
-        final ObjectMapper objectMapper = new ObjectMapper();
-        objectMapper.setSerializationInclusion(Include.NON_NULL);
+
         log.info("persist entity to index (" + indexName + ")");
         try {
-            final String entityString = objectMapper.writeValueAsString(entity);
+            final String entityString = getObjectMapper().writeValueAsString(entity);
             log.info("entity: " + entityString);
             final Request request = new Request("POST", "/" + indexName + "/_doc/");
             request.setJsonEntity(entityString);
-            // log.info("transmit request to elasticsearch: " + request.toString());
             final Response response = restClient.performRequest(request);
             final int statusCode = response.getStatusLine().getStatusCode();
             if (statusCode >= 200 && statusCode < 300) {
@@ -60,12 +59,11 @@ public class ElasticsearchIndex {
             Request request = new Request("GET", indexName + "/_doc/" + id);
             Response response = restClient.performRequest(request);
             InputStream content = response.getEntity().getContent();
-            final ObjectMapper objectMapper = new ObjectMapper();
-            objectMapper.setSerializationInclusion(Include.NON_NULL);
-            ElasticsearchEntity entity = objectMapper.readValue(content, ElasticsearchEntity.class);
+            //            objectMapper.setSerializationInclusion(Include.NON_NULL);
+            ElasticsearchEntity entity = getObjectMapper().readValue(content, ElasticsearchEntity.class);
 
             if (entity.found) {
-                return objectMapper.convertValue(entity._source, entityClass);
+                return getObjectMapper().convertValue(entity._source, entityClass);
             }
         } catch (IOException e) {
             // TODO: better exception handling
@@ -73,5 +71,12 @@ public class ElasticsearchIndex {
         }
 
         return null;
+    }
+
+    private ObjectMapper getObjectMapper() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        objectMapper.registerModule(new JavaTimeModule());
+        objectMapper.setSerializationInclusion(Include.NON_NULL);
+        return objectMapper;
     }
 }

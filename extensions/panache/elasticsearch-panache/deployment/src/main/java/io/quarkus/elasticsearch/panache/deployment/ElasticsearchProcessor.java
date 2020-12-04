@@ -1,8 +1,9 @@
 package io.quarkus.elasticsearch.panache.deployment;
 
-import java.time.LocalDate;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
@@ -24,11 +25,10 @@ import io.quarkus.elasticsearch.panache.PanacheElasticsearchEntityBase;
 import io.quarkus.elasticsearch.panache.runtime.ElasticsearchConfig;
 import io.quarkus.elasticsearch.panache.runtime.ElasticsearchProducer;
 import io.quarkus.elasticsearch.panache.runtime.ElasticsearchRecorder;
-import io.quarkus.jackson.spi.JacksonModuleBuildItem;
-import io.quarkus.jsonb.spi.JsonbDeserializerBuildItem;
-import io.quarkus.jsonb.spi.JsonbSerializerBuildItem;
 import io.quarkus.panache.common.deployment.PanacheEntityClassesBuildItem;
 import io.quarkus.panache.common.deployment.PanacheFieldAccessEnhancer;
+import io.quarkus.panache.common.deployment.PanacheMethodCustomizer;
+import io.quarkus.panache.common.deployment.PanacheMethodCustomizerBuildItem;
 
 public class ElasticsearchProcessor {
 
@@ -48,34 +48,18 @@ public class ElasticsearchProcessor {
     }
 
     @BuildStep
-    void registerJsonbSerDeser(BuildProducer<JsonbSerializerBuildItem> jsonbSerializers,
-            BuildProducer<JsonbDeserializerBuildItem> jsonbDeserializers) {
-        jsonbSerializers
-                .produce(new JsonbSerializerBuildItem(
-                        io.quarkus.elasticsearch.panache.jsonb.LocalDateSerializer.class.getName()));
-        jsonbDeserializers
-                .produce(new JsonbDeserializerBuildItem(
-                        io.quarkus.elasticsearch.panache.jsonb.LocalDateDeserializer.class.getName()));
-    }
-
-    @BuildStep
-    void registerJacksonSerDeser(BuildProducer<JacksonModuleBuildItem> customSerDeser) {
-        customSerDeser.produce(
-                new JacksonModuleBuildItem.Builder("ObjectIdModule")
-                        .add(io.quarkus.elasticsearch.panache.jackson.LocalDateSerializer.class.getName(),
-                                io.quarkus.elasticsearch.panache.jackson.LocalDateDeserializer.class.getName(),
-                                LocalDate.class.getName())
-                        .build());
-    }
-
-    @BuildStep
     void build(CombinedIndexBuildItem index,
             ApplicationIndexBuildItem applicationIndex,
             BuildProducer<BytecodeTransformerBuildItem> transformers,
             BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
-            BuildProducer<PanacheEntityClassesBuildItem> entityClasses) throws Exception {
+            BuildProducer<PanacheEntityClassesBuildItem> entityClasses,
+            List<PanacheMethodCustomizerBuildItem> methodCustomizersBuildItems) throws Exception {
 
-        PanacheElasticsearchEntityEnhancer modelEnhancer = new PanacheElasticsearchEntityEnhancer(index.getIndex());
+        List<PanacheMethodCustomizer> methodCustomizers = methodCustomizersBuildItems.stream()
+                .map(bi -> bi.getMethodCustomizer()).collect(Collectors.toList());
+
+        PanacheElasticsearchEntityEnhancer modelEnhancer = new PanacheElasticsearchEntityEnhancer(index.getIndex(),
+                methodCustomizers);
         Set<String> modelClasses = new HashSet<>();
         // Note that we do this in two passes because for some reason Jandex does not give us subtypes
         // of PanacheMongoEntity if we ask for subtypes of PanacheMongoEntityBase

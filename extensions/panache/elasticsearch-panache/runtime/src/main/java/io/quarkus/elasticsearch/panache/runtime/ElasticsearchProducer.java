@@ -15,7 +15,9 @@ public class ElasticsearchProducer {
     @Produces
     @DefaultBean
     public ElasticsearchRestClientManager elasticsearchRestClientManager() {
-        return restClientManager == null ? restClientManager = createDefaultElastisearchRestClientManager() : restClientManager;
+        return restClientManager == null
+                ? restClientManager = createDefaultElastisearchRestClientManager()
+                : restClientManager;
     }
 
     public void setElasticsearchConfig(ElasticsearchConfig elasticsearchConfig) {

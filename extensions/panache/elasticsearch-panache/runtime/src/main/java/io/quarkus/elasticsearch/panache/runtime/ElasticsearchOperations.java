@@ -48,4 +48,5 @@ public class ElasticsearchOperations {
         return new IllegalStateException(
                 "This method is normally automatically overridden in subclasses");
     }
+
 }

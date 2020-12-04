@@ -3,15 +3,16 @@ package io.quarkus.elasticsearch.panache;
 import java.util.stream.Stream;
 
 import io.quarkus.elasticsearch.panache.runtime.ElasticsearchOperations;
+import io.quarkus.mongodb.panache.runtime.MongoOperations;
 import io.quarkus.panache.common.impl.GenerateBridge;
 
 /**
- * Represents an entity. If your Mongo entities extend this class they gain auto-generated accessors
+ * Represents an entity. If your Elasticsearch entities extend this class they gain auto-generated accessors
  * to all their public fields, as well as a lot of useful
  * methods. Unless you have a custom ID strategy, you should not extend this class directly but extend
- * {@link PanacheMongoEntity} instead.
+ * {@link PanacheElasticsearchEntity} instead.
  *
- * @see PanacheMongoEntity
+ * @see PanacheElasticsearchEntity
  */
 public abstract class PanacheElasticsearchEntityBase {
 
@@ -27,6 +28,17 @@ public abstract class PanacheElasticsearchEntityBase {
      */
     public void persist() {
         ElasticsearchOperations.persist(this);
+    }
+    
+    /**
+     * Update this entity in the database.
+     *
+     * @see #update(Iterable)
+     * @see #update(Stream)
+     * @see #update(Object, Object...)
+     */
+    public void update() {
+      ElasticsearchOperations.update(this);
     }
 
     /**
