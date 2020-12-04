@@ -18,10 +18,29 @@ import io.quarkus.test.junit.QuarkusTest;
 public class AmazonLambdaSimpleTestCase {
 
     @Test
+    public void testContext() throws Exception {
+        AwsProxyRequest request = new AwsProxyRequest();
+        request.setHttpMethod("GET");
+        request.setPath("/hello/context");
+        AwsProxyResponse out = LambdaClient.invoke(AwsProxyResponse.class, request);
+        Assertions.assertEquals(out.getStatusCode(), 204);
+    }
+
+    @Test
     public void testGetText() throws Exception {
         testGetText("/vertx/hello");
         testGetText("/servlet/hello");
         testGetText("/hello");
+    }
+
+    @Test
+    public void testSwaggerUi() throws Exception {
+        // this tests the FileRegion support in the handler
+        AwsProxyRequest request = request("/swagger-ui/");
+        AwsProxyResponse out = LambdaClient.invoke(AwsProxyResponse.class, request);
+        Assertions.assertEquals(out.getStatusCode(), 200);
+        Assertions.assertTrue(body(out).contains("Swagger UI"));
+
     }
 
     private String body(AwsProxyResponse response) {
@@ -31,20 +50,23 @@ public class AmazonLambdaSimpleTestCase {
     }
 
     private void testGetText(String path) {
-        AwsProxyRequest request = new AwsProxyRequest();
-        request.setHttpMethod("GET");
-        request.setPath(path);
+        AwsProxyRequest request = request(path);
         AwsProxyResponse out = LambdaClient.invoke(AwsProxyResponse.class, request);
         Assertions.assertEquals(out.getStatusCode(), 200);
         Assertions.assertEquals(body(out), "hello");
         Assertions.assertTrue(out.getMultiValueHeaders().getFirst("Content-Type").startsWith("text/plain"));
     }
 
-    @Test
-    public void test404() throws Exception {
+    private AwsProxyRequest request(String path) {
         AwsProxyRequest request = new AwsProxyRequest();
         request.setHttpMethod("GET");
-        request.setPath("/nowhere");
+        request.setPath(path);
+        return request;
+    }
+
+    @Test
+    public void test404() throws Exception {
+        AwsProxyRequest request = request("/nowhere");
         AwsProxyResponse out = LambdaClient.invoke(AwsProxyResponse.class, request);
         Assertions.assertEquals(out.getStatusCode(), 404);
     }

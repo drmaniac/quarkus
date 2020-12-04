@@ -30,7 +30,7 @@ path "database/creds/mydbrole" {
 
 # transit
 path "transit/*" {
-  capabilities = [ "create", "read", "update" ]
+  capabilities = [ "create", "read", "update", "delete", "list" ]
 }
 #path "transit/encrypt/my-key" {
 #  capabilities = [ "read", "update" ]
@@ -51,5 +51,13 @@ path "secret-v1/crud" {
 }
 
 path "totp/*" {
+  capabilities = ["read", "create", "update", "delete", "list"]
+}
+
+path "sys/*" {
+  capabilities = ["read", "create", "update", "delete", "list"]
+}
+
+path "auth/kubernetes/*" {
   capabilities = ["read", "create", "update", "delete", "list"]
 }

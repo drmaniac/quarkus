@@ -1,6 +1,6 @@
 package io.quarkus.vault.test;
 
-import static io.quarkus.vault.CredentialsProvider.PASSWORD_PROPERTY_NAME;
+import static io.quarkus.credentials.CredentialsProvider.PASSWORD_PROPERTY_NAME;
 import static io.quarkus.vault.runtime.VaultAuthManager.USERPASS_WRAPPING_TOKEN_PASSWORD_KEY;
 import static java.lang.Boolean.TRUE;
 import static java.lang.String.format;
@@ -13,9 +13,12 @@ import static org.junit.jupiter.api.Assertions.fail;
 import static org.testcontainers.containers.BindMode.READ_ONLY;
 import static org.testcontainers.containers.PostgreSQLContainer.POSTGRESQL_PORT;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.MalformedURLException;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -30,26 +33,31 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import javax.sql.DataSource;
 
 import org.jboss.logging.Logger;
-import org.jetbrains.annotations.NotNull;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.containers.output.OutputFrame;
 
+import io.quarkus.runtime.TlsConfig;
 import io.quarkus.vault.VaultException;
 import io.quarkus.vault.VaultKVSecretEngine;
 import io.quarkus.vault.runtime.VaultManager;
 import io.quarkus.vault.runtime.client.VaultClientException;
 import io.quarkus.vault.runtime.client.dto.sys.VaultInitResponse;
+import io.quarkus.vault.runtime.client.dto.sys.VaultPolicyBody;
 import io.quarkus.vault.runtime.client.dto.sys.VaultSealStatusResult;
 import io.quarkus.vault.runtime.config.HealthConfig;
+import io.quarkus.vault.runtime.config.VaultAuthenticationConfig;
 import io.quarkus.vault.runtime.config.VaultBuildTimeConfig;
+import io.quarkus.vault.runtime.config.VaultKubernetesAuthenticationConfig;
 import io.quarkus.vault.runtime.config.VaultRuntimeConfig;
 import io.quarkus.vault.runtime.config.VaultTlsConfig;
 import io.quarkus.vault.test.client.TestVaultClient;
@@ -62,7 +70,7 @@ public class VaultTestExtension {
     static final String DB_USERNAME = "postgres";
     public static final String DB_PASSWORD = "bar";
     public static final String SECRET_VALUE = "s\u20accr\u20act";
-    static final String DEFAULT_VAULT_VERSION = "1.2.2";
+    static final String DEFAULT_VAULT_VERSION = "1.6.0";
     static final int VAULT_PORT = 8200;
     static final int MAPPED_POSTGRESQL_PORT = 6543;
     public static final String VAULT_AUTH_USERPASS_USER = "bob";
@@ -86,7 +94,6 @@ public class VaultTestExtension {
 
     public static final String TMP_VAULT_POSTGRES_CREATION_SQL_FILE = "/tmp/vault-postgres-creation.sql";
     public static final String TMP_VAULT_CONFIG_JSON_FILE = "/tmp/vault-config.json";
-    public static final String TMP_VAULT_POLICY_FILE = "/tmp/vault.policy";
     public static final String TMP_POSTGRES_INIT_SQL_FILE = "/tmp/postgres-init.sql";
     public static final String TEST_QUERY_STRING = "SELECT 1";
     public static final String CONTAINER_TMP_CMD = "/tmp/cmd";
@@ -162,15 +169,18 @@ public class VaultTestExtension {
         VaultRuntimeConfig serverConfig = new VaultRuntimeConfig();
         serverConfig.tls = new VaultTlsConfig();
         serverConfig.url = getVaultUrl();
-        serverConfig.tls.skipVerify = true;
+        serverConfig.tls.skipVerify = Optional.of(true);
         serverConfig.tls.caCert = Optional.empty();
         serverConfig.connectTimeout = Duration.ofSeconds(5);
         serverConfig.readTimeout = Duration.ofSeconds(1);
+        serverConfig.authentication = new VaultAuthenticationConfig();
+        serverConfig.authentication.kubernetes = new VaultKubernetesAuthenticationConfig();
 
         VaultBuildTimeConfig buildTimeConfig = new VaultBuildTimeConfig();
         buildTimeConfig.health = new HealthConfig();
+        TlsConfig tlsConfig = new TlsConfig();
 
-        return new VaultManager(buildTimeConfig, serverConfig, new TestVaultClient(serverConfig));
+        return new VaultManager(buildTimeConfig, serverConfig, new TestVaultClient(serverConfig, tlsConfig), tlsConfig);
     }
 
     private static Optional<URL> getVaultUrl() {
@@ -181,7 +191,7 @@ public class VaultTestExtension {
         }
     }
 
-    public void start() throws InterruptedException, IOException {
+    public void start() throws InterruptedException, IOException, URISyntaxException {
 
         log.info("start containers on " + System.getProperty("os.name"));
 
@@ -217,7 +227,6 @@ public class VaultTestExtension {
                 .withClasspathResourceMapping(configFile, TMP_VAULT_CONFIG_JSON_FILE, READ_ONLY)
                 .withClasspathResourceMapping("vault-tls.key", "/tmp/vault-tls.key", READ_ONLY)
                 .withClasspathResourceMapping("vault-tls.crt", "/tmp/vault-tls.crt", READ_ONLY)
-                .withClasspathResourceMapping("vault.policy", TMP_VAULT_POLICY_FILE, READ_ONLY)
                 .withClasspathResourceMapping("vault-postgres-creation.sql", TMP_VAULT_POSTGRES_CREATION_SQL_FILE, READ_ONLY)
                 .withCommand("server", "-log-level=debug", "-config=" + TMP_VAULT_CONFIG_JSON_FILE);
 
@@ -226,7 +235,10 @@ public class VaultTestExtension {
         postgresContainer.start();
         execPostgres(format("psql -U %s -d %s -f %s", DB_USERNAME, DB_NAME, TMP_POSTGRES_INIT_SQL_FILE));
 
+        Consumer<OutputFrame> consumer = outputFrame -> System.out.print("VAULT >> " + outputFrame.getUtf8String());
+        vaultContainer.setLogConsumers(Arrays.asList(consumer));
         vaultContainer.start();
+
         initVault();
         log.info("vault has started with root token: " + rootToken);
     }
@@ -235,7 +247,7 @@ public class VaultTestExtension {
         return System.getProperty("vault.version", DEFAULT_VAULT_VERSION);
     }
 
-    private void initVault() throws InterruptedException, IOException {
+    private void initVault() throws InterruptedException, IOException, URISyntaxException {
 
         TestVaultClient vaultClient = (TestVaultClient) vaultManager.getVaultClient();
         VaultInitResponse vaultInit = vaultClient.init(1, 1);
@@ -263,6 +275,9 @@ public class VaultTestExtension {
         execVault(format("vault write auth/userpass/users/%s password=%s policies=%s",
                 VAULT_AUTH_USERPASS_USER, VAULT_AUTH_USERPASS_PASSWORD, VAULT_POLICY));
 
+        // k8s auth
+        execVault("vault auth enable kubernetes");
+
         // approle auth
         execVault("vault auth enable approle");
         execVault(format("vault write auth/approle/role/%s policies=%s",
@@ -273,7 +288,8 @@ public class VaultTestExtension {
                 format("generated role_id=%s secret_id=%s for approle=%s", appRoleRoleId, appRoleSecretId, VAULT_AUTH_APPROLE));
 
         // policy
-        execVault(format("vault policy write %s /tmp/vault.policy", VAULT_POLICY));
+        String policyContent = readResourceContent("vault.policy");
+        vaultClient.createUpdatePolicy(rootToken, VAULT_POLICY, new VaultPolicyBody(policyContent));
 
         // static secrets kv v1
         execVault(format("vault secrets enable -path=%s kv", SECRET_PATH_V1));
@@ -294,26 +310,26 @@ public class VaultTestExtension {
         // wrapped
 
         appRoleSecretIdWrappingToken = fetchWrappingToken(
-                execVault(format("vault write -wrap-ttl=60s -f auth/approle/role/%s/secret-id", VAULT_AUTH_APPROLE)));
+                execVault(format("vault write -wrap-ttl=120s -f auth/approle/role/%s/secret-id", VAULT_AUTH_APPROLE)));
         log.info("appRoleSecretIdWrappingToken=" + appRoleSecretIdWrappingToken);
 
         clientTokenWrappingToken = fetchWrappingToken(
-                execVault(format("vault token create -wrap-ttl=60s -ttl=10m -policy=%s", VAULT_POLICY)));
+                execVault(format("vault token create -wrap-ttl=120s -ttl=10m -policy=%s", VAULT_POLICY)));
         log.info("clientTokenWrappingToken=" + clientTokenWrappingToken);
 
         execVault(format("vault kv put %s/%s %s=%s", SECRET_PATH_V1, WRAPPING_TEST_PATH, USERPASS_WRAPPING_TOKEN_PASSWORD_KEY,
                 VAULT_AUTH_USERPASS_PASSWORD));
         passwordKvv1WrappingToken = fetchWrappingToken(
-                execVault(format("vault kv get -wrap-ttl=60s %s/%s", SECRET_PATH_V1, WRAPPING_TEST_PATH)));
+                execVault(format("vault kv get -wrap-ttl=120s %s/%s", SECRET_PATH_V1, WRAPPING_TEST_PATH)));
         log.info("passwordKvv1WrappingToken=" + passwordKvv1WrappingToken);
 
         execVault(format("vault kv put %s/%s %s=%s", SECRET_PATH_V2, WRAPPING_TEST_PATH, USERPASS_WRAPPING_TOKEN_PASSWORD_KEY,
                 VAULT_AUTH_USERPASS_PASSWORD));
         passwordKvv2WrappingToken = fetchWrappingToken(
-                execVault(format("vault kv get -wrap-ttl=60s %s/%s", SECRET_PATH_V2, WRAPPING_TEST_PATH)));
+                execVault(format("vault kv get -wrap-ttl=120s %s/%s", SECRET_PATH_V2, WRAPPING_TEST_PATH)));
         log.info("passwordKvv2WrappingToken=" + passwordKvv2WrappingToken);
         anotherPasswordKvv2WrappingToken = fetchWrappingToken(
-                execVault(format("vault kv get -wrap-ttl=60s %s/%s", SECRET_PATH_V2, WRAPPING_TEST_PATH)));
+                execVault(format("vault kv get -wrap-ttl=120s %s/%s", SECRET_PATH_V2, WRAPPING_TEST_PATH)));
         log.info("anotherPasswordKvv2WrappingToken=" + anotherPasswordKvv2WrappingToken);
 
         // dynamic secrets
@@ -356,6 +372,21 @@ public class VaultTestExtension {
         // TOTP
 
         execVault("vault secrets enable totp");
+    }
+
+    private String readResourceContent(String path) throws IOException {
+        int count;
+        byte[] buf = new byte[512];
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        InputStream in = Thread.currentThread().getContextClassLoader().getResourceAsStream(path);
+        try {
+            while ((count = in.read(buf)) > 0) {
+                baos.write(buf, 0, count);
+            }
+        } finally {
+            in.close();
+        }
+        return new String(baos.toByteArray());
     }
 
     private String fetchWrappingToken(String out) {
@@ -414,7 +445,6 @@ public class VaultTestExtension {
         return execResult;
     }
 
-    @NotNull
     private String[] createVaultCommand(String command) {
         String cmd = (rootToken != null ? "export VAULT_TOKEN=" + rootToken + " && " : "") + command;
         return new String[] { "/bin/sh", "-c", cmd };

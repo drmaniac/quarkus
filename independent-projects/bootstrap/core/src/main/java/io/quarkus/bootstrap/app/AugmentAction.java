@@ -7,5 +7,6 @@ public interface AugmentAction {
 
     StartupAction createInitialRuntimeApplication();
 
-    StartupAction reloadExistingApplication(Set<String> changedResources);
+    StartupAction reloadExistingApplication(boolean hasStartedSuccessfully, Set<String> changedResources,
+            ClassChangeInformation classChangeInformation);
 }

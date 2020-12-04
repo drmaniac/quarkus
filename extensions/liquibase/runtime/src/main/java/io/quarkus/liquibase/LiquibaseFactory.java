@@ -1,8 +1,9 @@
 package io.quarkus.liquibase;
 
+import java.util.Map;
+
 import javax.sql.DataSource;
 
-import io.agroal.api.AgroalDataSource;
 import io.quarkus.liquibase.runtime.LiquibaseConfig;
 import liquibase.Contexts;
 import liquibase.LabelExpression;
@@ -21,12 +22,12 @@ public class LiquibaseFactory {
     /**
      * The datasource
      */
-    private DataSource dataSource;
+    private final DataSource dataSource;
 
     /**
      * The liquibase configuration
      */
-    private LiquibaseConfig config;
+    private final LiquibaseConfig config;
 
     /**
      * The default constructor
@@ -34,7 +35,7 @@ public class LiquibaseFactory {
      * @param config the liquibase configuration
      * @param datasource the datasource for this liquibase bean
      */
-    public LiquibaseFactory(LiquibaseConfig config, AgroalDataSource datasource) {
+    public LiquibaseFactory(LiquibaseConfig config, DataSource datasource) {
         this.dataSource = datasource;
         this.config = config;
     }
@@ -65,7 +66,13 @@ public class LiquibaseFactory {
                     database.setDefaultSchemaName(config.defaultSchemaName.get());
                 }
             }
-            return new Liquibase(config.changeLog, resourceAccessor, database);
+            Liquibase liquibase = new Liquibase(config.changeLog, resourceAccessor, database);
+
+            for (Map.Entry<String, String> entry : config.changeLogParameters.entrySet()) {
+                liquibase.getChangeLogParameters().set(entry.getKey(), entry.getValue());
+            }
+
+            return liquibase;
 
         } catch (Exception ex) {
             throw new IllegalStateException(ex);

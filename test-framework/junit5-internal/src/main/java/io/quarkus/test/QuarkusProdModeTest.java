@@ -29,12 +29,13 @@ import java.util.TimerTask;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.logging.Handler;
 import java.util.logging.LogManager;
 import java.util.logging.LogRecord;
-import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.jboss.logmanager.Logger;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.exporter.ExplodedExporter;
 import org.jboss.shrinkwrap.api.exporter.ZipExporter;
@@ -72,10 +73,11 @@ public class QuarkusProdModeTest
     private static final String QUARKUS_HTTP_PORT_PROPERTY = "quarkus.http.port";
 
     private static final Logger rootLogger;
+    private Handler[] originalHandlers;
 
     static {
         System.setProperty("java.util.logging.manager", "org.jboss.logmanager.LogManager");
-        rootLogger = LogManager.getLogManager().getLogger("");
+        rootLogger = (Logger) LogManager.getLogManager().getLogger("");
     }
 
     private Path outputDir;
@@ -95,6 +97,9 @@ public class QuarkusProdModeTest
 
     private String logFileName;
     private Map<String, String> runtimeProperties;
+    // by default, we use these lower heap settings
+    private List<String> jvmArgs = Collections.singletonList("-Xmx128m");
+    private Map<String, String> testResourceProperties = new HashMap<>();
 
     private Process process;
 
@@ -108,6 +113,7 @@ public class QuarkusProdModeTest
     private String startupConsoleOutput;
     private int exitCode;
     private Consumer<Throwable> assertBuildException;
+    private String[] commandLineParameters = new String[0];
 
     public QuarkusProdModeTest() {
         InputStream appPropsIs = Thread.currentThread().getContextClassLoader().getResourceAsStream("application.properties");
@@ -174,6 +180,14 @@ public class QuarkusProdModeTest
      */
     public QuarkusProdModeTest setLogFileName(String logFileName) {
         this.logFileName = logFileName;
+        return this;
+    }
+
+    /**
+     * The complete set of JVM args to be used if the built artifact is configured to be run
+     */
+    public QuarkusProdModeTest setJVMArgs(final List<String> jvmArgs) {
+        this.jvmArgs = jvmArgs;
         return this;
     }
 
@@ -288,6 +302,7 @@ public class QuarkusProdModeTest
 
     @Override
     public void beforeAll(ExtensionContext extensionContext) throws Exception {
+        originalHandlers = rootLogger.getHandlers();
         rootLogger.addHandler(inMemoryLogHandler);
 
         timeoutTask = new TimerTask() {
@@ -309,7 +324,8 @@ public class QuarkusProdModeTest
         ExtensionContext.Store store = extensionContext.getRoot().getStore(ExtensionContext.Namespace.GLOBAL);
         if (store.get(TestResourceManager.class.getName()) == null) {
             TestResourceManager manager = new TestResourceManager(extensionContext.getRequiredTestClass());
-            manager.start();
+            manager.init();
+            testResourceProperties = manager.start();
             store.put(TestResourceManager.class.getName(), new ExtensionContext.Store.CloseableResource() {
 
                 @Override
@@ -376,6 +392,8 @@ public class QuarkusProdModeTest
                 } else {
                     throw e;
                 }
+            } finally {
+                curatedApplication.close();
             }
 
             Path builtResultArtifact = setupProdModeResults(testClass, buildDir, result);
@@ -431,7 +449,7 @@ public class QuarkusProdModeTest
         if (runtimeProperties == null) {
             runtimeProperties = new HashMap<>();
         } else {
-            // copy the use supplied properties since it might an immutable map
+            // copy the use supplied properties since it might be an immutable map
             runtimeProperties = new HashMap<>(runtimeProperties);
         }
         runtimeProperties.putIfAbsent(QUARKUS_HTTP_PORT_PROPERTY, DEFAULT_HTTP_PORT);
@@ -440,19 +458,31 @@ public class QuarkusProdModeTest
             runtimeProperties.put("quarkus.log.file.path", logfilePath.toAbsolutePath().toString());
             runtimeProperties.put("quarkus.log.file.enable", "true");
         }
+
+        // ensure that the properties obtained from QuarkusTestResourceLifecycleManager
+        // are propagated to runtime
+        runtimeProperties.putAll(testResourceProperties);
+
         List<String> systemProperties = runtimeProperties.entrySet().stream()
                 .map(e -> "-D" + e.getKey() + "=" + e.getValue()).collect(Collectors.toList());
         List<String> command = new ArrayList<>(systemProperties.size() + 3);
         if (builtResultArtifact.getFileName().toString().endsWith(".jar")) {
             command.add(JavaBinFinder.findBin());
+            if (this.jvmArgs != null) {
+                command.addAll(this.jvmArgs);
+            }
             command.addAll(systemProperties);
             command.add("-jar");
             command.add(builtResultArtifact.toAbsolutePath().toString());
         } else {
             command.add(builtResultArtifact.toAbsolutePath().toString());
+            if (this.jvmArgs != null) {
+                command.addAll(this.jvmArgs);
+            }
             command.addAll(systemProperties);
         }
 
+        command.addAll(Arrays.asList(commandLineParameters));
         process = new ProcessBuilder(command)
                 .redirectErrorStream(true)
                 .directory(builtResultArtifactParentDir.toFile())
@@ -527,6 +557,9 @@ public class QuarkusProdModeTest
 
     @Override
     public void afterAll(ExtensionContext extensionContext) throws Exception {
+        rootLogger.setHandlers(originalHandlers);
+        inMemoryLogHandler.clearRecords();
+
         if (run) {
             RestAssuredURLManager.clearURL();
         }
@@ -541,7 +574,9 @@ public class QuarkusProdModeTest
         }
 
         try {
-            curatedApplication.close();
+            if (curatedApplication != null) {
+                curatedApplication.close();
+            }
         } finally {
             timeoutTask.cancel();
             timeoutTask = null;
@@ -590,6 +625,11 @@ public class QuarkusProdModeTest
             customApplicationProperties = new Properties();
         }
         customApplicationProperties.put(propertyKey, propertyValue);
+        return this;
+    }
+
+    public QuarkusProdModeTest setCommandLineParameters(String... commandLineParameters) {
+        this.commandLineParameters = commandLineParameters;
         return this;
     }
 

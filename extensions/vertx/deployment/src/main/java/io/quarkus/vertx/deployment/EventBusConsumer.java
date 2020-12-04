@@ -1,6 +1,12 @@
 package io.quarkus.vertx.deployment;
 
-import static io.quarkus.vertx.deployment.VertxConstants.*;
+import static io.quarkus.vertx.ConsumeEvent.FAILURE_CODE;
+import static io.quarkus.vertx.deployment.VertxConstants.AXLE_MESSAGE;
+import static io.quarkus.vertx.deployment.VertxConstants.COMPLETION_STAGE;
+import static io.quarkus.vertx.deployment.VertxConstants.MESSAGE;
+import static io.quarkus.vertx.deployment.VertxConstants.MUTINY_MESSAGE;
+import static io.quarkus.vertx.deployment.VertxConstants.RX_MESSAGE;
+import static io.quarkus.vertx.deployment.VertxConstants.UNI;
 
 import java.lang.annotation.Annotation;
 import java.util.concurrent.CompletableFuture;
@@ -9,6 +15,7 @@ import java.util.function.BiConsumer;
 
 import org.jboss.jandex.AnnotationInstance;
 import org.jboss.jandex.AnnotationValue;
+import org.jboss.jandex.DotName;
 import org.jboss.jandex.MethodInfo;
 import org.jboss.jandex.Type;
 import org.jboss.logging.Logger;
@@ -20,7 +27,6 @@ import io.quarkus.arc.InstanceHandle;
 import io.quarkus.arc.processor.BeanInfo;
 import io.quarkus.arc.processor.BuiltinScope;
 import io.quarkus.arc.processor.DotNames;
-import io.quarkus.deployment.util.HashUtil;
 import io.quarkus.gizmo.AssignableResultHandle;
 import io.quarkus.gizmo.BranchResult;
 import io.quarkus.gizmo.BytecodeCreator;
@@ -32,8 +38,10 @@ import io.quarkus.gizmo.MethodCreator;
 import io.quarkus.gizmo.MethodDescriptor;
 import io.quarkus.gizmo.ResultHandle;
 import io.quarkus.gizmo.TryBlock;
+import io.quarkus.runtime.util.HashUtil;
 import io.quarkus.vertx.ConsumeEvent;
 import io.quarkus.vertx.runtime.EventConsumerInvoker;
+import io.smallrye.common.annotation.Blocking;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
@@ -85,6 +93,9 @@ class EventBusConsumer {
             .ofMethod(Uni.class, "subscribeAsCompletionStage", CompletableFuture.class);
     protected static final MethodDescriptor THROWABLE_GET_MESSAGE = MethodDescriptor
             .ofMethod(Throwable.class, "getMessage", String.class);
+    protected static final MethodDescriptor THROWABLE_TO_STRING = MethodDescriptor
+            .ofMethod(Throwable.class, "toString", String.class);
+    protected static final DotName BLOCKING = DotName.createSimple(Blocking.class.getName());
 
     static String generateInvoker(BeanInfo bean, MethodInfo method,
             AnnotationInstance consumeEvent,
@@ -115,7 +126,8 @@ class EventBusConsumer {
         ResultHandle containerHandle = invoke.invokeStaticMethod(ARC_CONTAINER);
 
         AnnotationValue blocking = consumeEvent.value("blocking");
-        if (blocking != null && blocking.asBoolean()) {
+        boolean blockingAnnotation = method.hasAnnotation(BLOCKING);
+        if ((blocking != null && blocking.asBoolean()) || blockingAnnotation) {
             // Blocking operation must be performed on a worker thread
             ResultHandle vertxHandle = invoke
                     .invokeInterfaceMethod(INSTANCE_HANDLE_GET,
@@ -130,8 +142,20 @@ class EventBusConsumer {
             TryBlock tryBlock = funcBytecode.tryBlock();
             invoke(bean, method, messageHandle, tryBlock);
             tryBlock.invokeInterfaceMethod(FUTURE_COMPLETE, funcBytecode.getMethodParam(0), tryBlock.loadNull());
+
             CatchBlockCreator catchBlock = tryBlock.addCatch(Exception.class);
-            catchBlock.invokeInterfaceMethod(FUTURE_FAIL, funcBytecode.getMethodParam(0), catchBlock.getMethodParam(0));
+            // Need to reply with the caught exception - using Throwable.toString on purpose to get the class name.
+            ResultHandle failureMessage = catchBlock
+                    .invokeVirtualMethod(THROWABLE_TO_STRING, catchBlock.getCaughtException());
+            ResultHandle failureStatus = catchBlock.load(FAILURE_CODE);
+            catchBlock.invokeInterfaceMethod(
+                    MESSAGE_FAIL,
+                    messageHandle,
+                    failureStatus,
+                    failureMessage);
+            // Completing successfully, the failure has been sent to the sender.
+            catchBlock.invokeInterfaceMethod(FUTURE_COMPLETE, funcBytecode.getMethodParam(0), catchBlock.loadNull());
+
             funcBytecode.returnValue(null);
 
             invoke.invokeInterfaceMethod(VERTX_EXECUTE_BLOCKING, vertxHandle, func.getInstance(), invoke.load(false),

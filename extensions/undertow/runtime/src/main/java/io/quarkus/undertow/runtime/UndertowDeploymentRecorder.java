@@ -48,6 +48,7 @@ import io.quarkus.security.UnauthorizedException;
 import io.quarkus.security.identity.CurrentIdentityAssociation;
 import io.quarkus.vertx.http.runtime.CurrentVertxRequest;
 import io.quarkus.vertx.http.runtime.HttpConfiguration;
+import io.quarkus.vertx.http.runtime.VertxHttpRecorder;
 import io.quarkus.vertx.http.runtime.security.QuarkusHttpUser;
 import io.undertow.httpcore.BufferAllocator;
 import io.undertow.httpcore.StatusCodes;
@@ -151,7 +152,8 @@ public class UndertowDeploymentRecorder {
 
     public RuntimeValue<DeploymentInfo> createDeployment(String name, Set<String> knownFile, Set<String> knownDirectories,
             LaunchMode launchMode, ShutdownContext context, String contextPath, String httpRootPath, String defaultCharset,
-            String requestCharacterEncoding, String responseCharacterEncoding, boolean proactiveAuth) {
+            String requestCharacterEncoding, String responseCharacterEncoding, boolean proactiveAuth,
+            List<String> welcomeFiles) {
         String realMountPoint;
         if (contextPath.equals("/")) {
             realMountPoint = httpRootPath;
@@ -196,7 +198,12 @@ public class UndertowDeploymentRecorder {
         }
         d.setResourceManager(resourceManager);
 
-        d.addWelcomePages("index.html", "index.htm");
+        if (welcomeFiles != null) {
+            // if available, use welcome-files from web.xml
+            d.addWelcomePages(welcomeFiles);
+        } else {
+            d.addWelcomePages("index.html", "index.htm");
+        }
 
         d.addServlet(new ServletInfo(ServletPathMatches.DEFAULT_SERVLET_NAME, DefaultServlet.class).setAsyncSupported(true));
         for (HandlerWrapper i : hotDeploymentWrappers) {
@@ -204,16 +211,7 @@ public class UndertowDeploymentRecorder {
         }
         d.addAuthenticationMechanism("QUARKUS", new ImmediateAuthenticationMechanismFactory(QuarkusAuthMechanism.INSTANCE));
         d.setLoginConfig(new LoginConfig("QUARKUS", "QUARKUS"));
-        context.addShutdownTask(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    d.getResourceManager().close();
-                } catch (IOException e) {
-                    log.error("Failed to close Servlet ResourceManager", e);
-                }
-            }
-        });
+        context.addShutdownTask(new ShutdownContext.CloseRunnable(d.getResourceManager()));
 
         d.addNotificationReceiver(new NotificationReceiver() {
             @Override
@@ -378,6 +376,7 @@ public class UndertowDeploymentRecorder {
                 event.remove(QuarkusHttpUser.AUTH_FAILURE_HANDLER);
                 VertxHttpExchange exchange = new VertxHttpExchange(event.request(), allocator, executorService, event,
                         event.getBody());
+                exchange.setPushHandler(VertxHttpRecorder.getRootHandler());
                 Optional<MemorySize> maxBodySize = httpConfiguration.limits.maxBodySize;
                 if (maxBodySize.isPresent()) {
                     exchange.setMaxEntitySize(maxBodySize.get().asLongValue());
@@ -429,6 +428,7 @@ public class UndertowDeploymentRecorder {
                         .addInitParam(QuarkusErrorServlet.SHOW_STACK, Boolean.toString(launchMode.isDevOrTest())));
             }
         }
+        setupRequestScope(info.getValue(), beanContainer);
 
         try {
             ClassIntrospecter defaultVal = info.getValue().getClassIntrospecter();
@@ -519,91 +519,90 @@ public class UndertowDeploymentRecorder {
         deployment.getValue().addServletExtension(extension);
     }
 
-    public ServletExtension setupRequestScope(BeanContainer beanContainer) {
-        return new ServletExtension() {
+    public void setupRequestScope(DeploymentInfo deploymentInfo, BeanContainer beanContainer) {
+        CurrentVertxRequest currentVertxRequest = CDI.current().select(CurrentVertxRequest.class).get();
+        Instance<CurrentIdentityAssociation> identityAssociations = CDI.current()
+                .select(CurrentIdentityAssociation.class);
+        CurrentIdentityAssociation association;
+        if (identityAssociations.isResolvable()) {
+            association = identityAssociations.get();
+        } else {
+            association = null;
+        }
+        deploymentInfo.addThreadSetupAction(new ThreadSetupHandler() {
             @Override
-            public void handleDeployment(DeploymentInfo deploymentInfo, ServletContext servletContext) {
-                CurrentVertxRequest currentVertxRequest = CDI.current().select(CurrentVertxRequest.class).get();
-                Instance<CurrentIdentityAssociation> identityAssociations = CDI.current()
-                        .select(CurrentIdentityAssociation.class);
-                CurrentIdentityAssociation association;
-                if (identityAssociations.isResolvable()) {
-                    association = identityAssociations.get();
-                } else {
-                    association = null;
-                }
-                deploymentInfo.addThreadSetupAction(new ThreadSetupHandler() {
+            public <T, C> ThreadSetupHandler.Action<T, C> create(Action<T, C> action) {
+                return new Action<T, C>() {
                     @Override
-                    public <T, C> ThreadSetupHandler.Action<T, C> create(Action<T, C> action) {
-                        return new Action<T, C>() {
-                            @Override
-                            public T call(HttpServerExchange exchange, C context) throws Exception {
-                                // Not sure what to do here
-                                if (exchange == null) {
-                                    return action.call(exchange, context);
+                    public T call(HttpServerExchange exchange, C context) throws Exception {
+                        // Not sure what to do here
+                        ManagedContext requestContext = beanContainer.requestContext();
+                        if (requestContext.isActive()) {
+                            return action.call(exchange, context);
+                        } else if (exchange == null) {
+                            requestContext.activate();
+                            try {
+                                return action.call(exchange, context);
+                            } finally {
+                                requestContext.terminate();
+                            }
+                        } else {
+                            InjectableContext.ContextState existingRequestContext = exchange
+                                    .getAttachment(REQUEST_CONTEXT);
+                            try {
+                                requestContext.activate(existingRequestContext);
+
+                                VertxHttpExchange delegate = (VertxHttpExchange) exchange.getDelegate();
+                                RoutingContext rc = (RoutingContext) delegate.getContext();
+                                currentVertxRequest.setCurrent(rc);
+
+                                if (association != null) {
+                                    association
+                                            .setIdentity(QuarkusHttpUser.getSecurityIdentity(rc, null));
                                 }
-                                ManagedContext requestContext = beanContainer.requestContext();
-                                if (requestContext.isActive()) {
-                                    return action.call(exchange, context);
-                                } else {
-                                    InjectableContext.ContextState existingRequestContext = exchange
-                                            .getAttachment(REQUEST_CONTEXT);
-                                    try {
-                                        requestContext.activate(existingRequestContext);
 
-                                        VertxHttpExchange delegate = (VertxHttpExchange) exchange.getDelegate();
-                                        RoutingContext rc = (RoutingContext) delegate.getContext();
-                                        currentVertxRequest.setCurrent(rc);
-
-                                        if (association != null) {
-                                            association
-                                                    .setIdentity(QuarkusHttpUser.getSecurityIdentity(rc, null));
-                                        }
-
-                                        return action.call(exchange, context);
-                                    } finally {
-                                        ServletRequestContext src = exchange
-                                                .getAttachment(ServletRequestContext.ATTACHMENT_KEY);
-                                        HttpServletRequestImpl req = src.getOriginalRequest();
-                                        if (req.isAsyncStarted()) {
-                                            exchange.putAttachment(REQUEST_CONTEXT, requestContext.getState());
-                                            requestContext.deactivate();
-                                            if (existingRequestContext == null) {
-                                                req.getAsyncContextInternal().addListener(new AsyncListener() {
-                                                    @Override
-                                                    public void onComplete(AsyncEvent event) throws IOException {
-                                                        requestContext.activate(exchange
-                                                                .getAttachment(REQUEST_CONTEXT));
-                                                        requestContext.terminate();
-                                                    }
-
-                                                    @Override
-                                                    public void onTimeout(AsyncEvent event) throws IOException {
-                                                        onComplete(event);
-                                                    }
-
-                                                    @Override
-                                                    public void onError(AsyncEvent event) throws IOException {
-                                                        onComplete(event);
-                                                    }
-
-                                                    @Override
-                                                    public void onStartAsync(AsyncEvent event) throws IOException {
-
-                                                    }
-                                                });
+                                return action.call(exchange, context);
+                            } finally {
+                                ServletRequestContext src = exchange
+                                        .getAttachment(ServletRequestContext.ATTACHMENT_KEY);
+                                HttpServletRequestImpl req = src.getOriginalRequest();
+                                if (req.isAsyncStarted()) {
+                                    exchange.putAttachment(REQUEST_CONTEXT, requestContext.getState());
+                                    requestContext.deactivate();
+                                    if (existingRequestContext == null) {
+                                        req.getAsyncContextInternal().addListener(new AsyncListener() {
+                                            @Override
+                                            public void onComplete(AsyncEvent event) throws IOException {
+                                                requestContext.activate(exchange
+                                                        .getAttachment(REQUEST_CONTEXT));
+                                                requestContext.terminate();
                                             }
-                                        } else {
-                                            requestContext.terminate();
-                                        }
+
+                                            @Override
+                                            public void onTimeout(AsyncEvent event) throws IOException {
+                                                onComplete(event);
+                                            }
+
+                                            @Override
+                                            public void onError(AsyncEvent event) throws IOException {
+                                                onComplete(event);
+                                            }
+
+                                            @Override
+                                            public void onStartAsync(AsyncEvent event) throws IOException {
+
+                                            }
+                                        });
                                     }
+                                } else {
+                                    requestContext.terminate();
                                 }
                             }
-                        };
+                        }
                     }
-                });
+                };
             }
-        };
+        });
     }
 
     public void addServletContainerInitializer(RuntimeValue<DeploymentInfo> deployment,

@@ -53,7 +53,7 @@ The solution is located in the `tests-with-coverage-quickstart` {quickstarts-tre
 
 Let's start from an empty application created with the Quarkus Maven plugin: 
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 mvn io.quarkus:quarkus-maven-plugin:create \
     -DprojectGroupId=org.acme \
@@ -211,9 +211,10 @@ We're now able to distinguish unit tests and integration tests. Now, let's bind 
                 <version>${surefire-plugin.version}</version>
                 <configuration>
                     <excludedGroups>integration</excludedGroups>
-                    <systemProperties>
+                    <systemPropertyVariables>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
-                    </systemProperties>
+                        <maven.home>${maven.home}</maven.home>
+                    </systemPropertyVariables>
                 </configuration>
                 <executions>
                     <execution>
@@ -283,7 +284,7 @@ NOTE: If you run `./mvnw clean test` the coverage information will be collected 
 
 == Measuring separately the coverage of each test type
 
-It is not strictly necessary, but let's distinguish the coverage brought by each test type. To do so, we`ll just output the coverage info in two different files, one in `jacoco-ut.exec` and one in `jacoco-it.exec`.
+It is not strictly necessary, but let's distinguish the coverage brought by each test type. To do so, we'll just output the coverage info in two different files, one in `jacoco-ut.exec` and one in `jacoco-it.exec`.
 We also need to generate a separate report for each test execution. Let's adjust the Jacoco configuration for that:
 
 [source,xml,subs=attributes+]
@@ -355,7 +356,7 @@ Given the content of `GreetingResourceTest`, `GreetingResource` should have been
 
 During the report generation, you may have noticed a warning:
 
-[source,shell,subs=attributes+]
+[source,text,subs=attributes+]
 ----
 [WARNING] Classes in bundle '***' do no match with execution data. For report generation the same class files must be used as at runtime.
 [WARNING] Execution data for class org/acme/testcoverage/GreetingResource does not match.
@@ -408,9 +409,9 @@ public class GreetingResource {
 ----
 
 Some might say that this approach is preferable since the field can be *final* like this. Anyway, in some cases you might need an explicit constructor. And, in that case, the coverage is not reported properly by JaCoCo.
-This is because Quarkus generates a constructor without any parameter and does some bycode manipulations in order to add it to the class. That is what happened here, just before the execution of the integration tests:
+This is because Quarkus generates a constructor without any parameter and does some bytecode manipulations in order to add it to the class. That is what happened here, just before the execution of the integration tests:
 
-[source,shell,subs=attributes+]
+[source,text,subs=attributes+]
 ----
 [INFO] --- quarkus-maven-plugin:0.16.0:build (default) @ getting-started-testing ---
 [INFO] [io.quarkus.deployment.QuarkusAugmentor] Beginning quarkus augmentation
@@ -531,10 +532,11 @@ It also requires a small change in the Surefire configuration. Note below that w
                 <version>${surefire-plugin.version}</version>
                 <configuration>
                     <excludedGroups>integration</excludedGroups>
-                    <systemProperties>
+                    <systemPropertyVariables>
                         <jacoco-agent.destfile>${project.build.directory}/jacoco-ut.exec</jacoco-agent.destfile>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
-                    </systemProperties>
+                        <maven.home>${maven.home}</maven.home>
+                    </systemPropertyVariables>
                 </configuration>
                 <executions>
                     <execution>
@@ -546,9 +548,9 @@ It also requires a small change in the Surefire configuration. Note below that w
                         <configuration>
                             <excludedGroups>!integration</excludedGroups>
                             <groups>integration</groups>
-                            <systemProperties>
+                            <systemPropertyVariables>
                                 <jacoco-agent.destfile>${project.build.directory}/jacoco-it.exec</jacoco-agent.destfile>
-                            </systemProperties>
+                            </systemPropertyVariables>
                         </configuration>
                     </execution>
                 </executions>
@@ -577,10 +579,11 @@ You should end up with something like this (note the addition of the `merge-resu
                 <version>${surefire-plugin.version}</version>
                 <configuration>
                     <excludedGroups>integration</excludedGroups>
-                    <systemProperties>
+                    <systemPropertyVariables>
                         <jacoco-agent.destfile>${project.build.directory}/jacoco-ut.exec</jacoco-agent.destfile>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
-                    </systemProperties>
+                        <maven.home>${maven.home}</maven.home>
+                    </systemPropertyVariables>
                 </configuration>
                 <executions>
                     <execution>
@@ -592,9 +595,9 @@ You should end up with something like this (note the addition of the `merge-resu
                         <configuration>
                             <excludedGroups>!integration</excludedGroups>
                             <groups>integration</groups>
-                            <systemProperties>
+                            <systemPropertyVariables>
                                 <jacoco-agent.destfile>${project.build.directory}/jacoco-it.exec</jacoco-agent.destfile>
-                            </systemProperties>
+                            </systemPropertyVariables>
                         </configuration>
                     </execution>
                 </executions>
@@ -702,4 +705,4 @@ You should end up with something like this (note the addition of the `merge-resu
 == Conclusion
 
 You now have all the information you need to study the coverage of your tests!
-But remember, some code that is not covered is certinaly not well tested. But some code that is covered is not necessarily *well* tested. Make sure to write good tests!
+But remember, some code that is not covered is certainly not well tested. But some code that is covered is not necessarily *well* tested. Make sure to write good tests!

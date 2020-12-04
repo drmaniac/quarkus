@@ -2,10 +2,12 @@ package io.quarkus.arc;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Type;
+import java.util.Collection;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
 import javax.enterprise.context.ContextNotActiveException;
+import javax.enterprise.inject.Instance;
 import javax.enterprise.inject.spi.BeanManager;
 import javax.enterprise.util.TypeLiteral;
 
@@ -26,6 +28,13 @@ public interface ArcContainer {
      * @throws IllegalArgumentException if there is more than one active context for the given scope
      */
     InjectableContext getActiveContext(Class<? extends Annotation> scopeType);
+
+    /**
+     * 
+     * @param scopeType
+     * @return the matching context objects, never null
+     */
+    Collection<InjectableContext> getContexts(Class<? extends Annotation> scopeType);
 
     /**
      * 
@@ -96,6 +105,34 @@ public interface ArcContainer {
      * @return a new bean instance handle
      */
     <T> InstanceHandle<T> instance(InjectableBean<T> bean);
+
+    /**
+     * Instances of dependent scoped beans obtained with the returned injectable instance must be explicitly destroyed, either
+     * via the {@link Instance#destroy(Object)} method invoked upon the same injectable instance or with
+     * {@link InstanceHandle#destroy()}.
+     * 
+     * If no qualifier is passed, the <tt>@Default</tt> qualifier is assumed.
+     * 
+     * @param <T>
+     * @param type
+     * @param qualifiers
+     * @return a new injectable instance that could be used for programmatic lookup
+     */
+    <T> InjectableInstance<T> select(Class<T> type, Annotation... qualifiers);
+
+    /**
+     * Instances of dependent scoped beans obtained with the returned injectable instance must be explicitly destroyed, either
+     * via the {@link Instance#destroy(Object)} method invoked upon the same injectable instance or with
+     * {@link InstanceHandle#destroy()}.
+     * 
+     * If no qualifier is passed, the <tt>@Default</tt> qualifier is assumed.
+     * 
+     * @param <T>
+     * @param type
+     * @param qualifiers
+     * @return a new injectable instance that could be used for programmatic lookup
+     */
+    <T> InjectableInstance<T> select(TypeLiteral<T> type, Annotation... qualifiers);
 
     /**
      * Returns true if Arc container is running.

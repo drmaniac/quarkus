@@ -1,6 +1,7 @@
 package io.quarkus.amazon.lambda.deployment;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -28,6 +29,7 @@ import io.quarkus.amazon.lambda.runtime.LambdaConfig;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.BeanContainerBuildItem;
 import io.quarkus.builder.BuildException;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.ExecutionTime;
@@ -40,8 +42,6 @@ import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveHierarchyBuildItem;
-import io.quarkus.deployment.pkg.builditem.ArtifactResultBuildItem;
-import io.quarkus.deployment.pkg.builditem.OutputTargetBuildItem;
 import io.quarkus.deployment.pkg.steps.NativeBuild;
 import io.quarkus.deployment.recording.RecorderContext;
 import io.quarkus.runtime.LaunchMode;
@@ -59,7 +59,7 @@ public final class AmazonLambdaProcessor {
 
     @BuildStep
     FeatureBuildItem feature() {
-        return new FeatureBuildItem(FeatureBuildItem.AMAZON_LAMBDA);
+        return new FeatureBuildItem(Feature.AMAZON_LAMBDA);
     }
 
     @BuildStep
@@ -91,16 +91,20 @@ public final class AmazonLambdaProcessor {
         List<AmazonLambdaBuildItem> ret = new ArrayList<>();
 
         for (ClassInfo info : allKnownImplementors) {
-            final DotName name = info.name();
-            builder.addBeanClass(name.toString());
-            String cdiName = null;
-            List<AnnotationInstance> named = info.annotations().get(NAMED);
-            if (named != null && !named.isEmpty()) {
-                cdiName = named.get(0).value().asString();
+            if (Modifier.isAbstract(info.flags())) {
+                continue;
             }
 
+            final DotName name = info.name();
             final String lambda = name.toString();
+            builder.addBeanClass(lambda);
             reflectiveClassBuildItemBuildProducer.produce(new ReflectiveClassBuildItem(true, false, lambda));
+
+            String cdiName = null;
+            AnnotationInstance named = info.classAnnotation(NAMED);
+            if (named != null) {
+                cdiName = named.value().asString();
+            }
 
             ClassInfo current = info;
             boolean done = false;
@@ -114,8 +118,16 @@ public final class AmazonLambdaProcessor {
                             break;
                         } else if (method.parameters().size() == 2
                                 && !method.parameters().get(0).name().equals(DotName.createSimple(Object.class.getName()))) {
-                            reflectiveHierarchy.produce(new ReflectiveHierarchyBuildItem(method.parameters().get(0)));
-                            reflectiveHierarchy.produce(new ReflectiveHierarchyBuildItem(method.returnType()));
+                            String source = getClass().getSimpleName() + " > " + method.declaringClass() + "[" + method + "]";
+
+                            reflectiveHierarchy.produce(new ReflectiveHierarchyBuildItem.Builder()
+                                    .type(method.parameters().get(0))
+                                    .source(source)
+                                    .build());
+                            reflectiveHierarchy.produce(new ReflectiveHierarchyBuildItem.Builder()
+                                    .type(method.returnType())
+                                    .source(source)
+                                    .build());
                             done = true;
                             break;
                         }
@@ -245,30 +257,6 @@ public final class AmazonLambdaProcessor {
         if (config.enablePollingJvmMode && mode.isDevOrTest()) {
             recorder.startPollLoop(shutdownContextBuildItem);
         }
-    }
-
-    @BuildStep
-    public void generateScripts(OutputTargetBuildItem target,
-            Optional<ProvidedAmazonLambdaHandlerBuildItem> providedLambda,
-            BuildProducer<ArtifactResultBuildItem> artifactResultProducer) throws Exception {
-        if (providedLambda.isPresent())
-            return; // assume these will be generated elsewhere
-        String output = LambdaUtil.copyResource("lambda/bootstrap-example.sh");
-        LambdaUtil.writeFile(target, "bootstrap-example.sh", output);
-
-        String lambdaName = LambdaUtil.artifactToLambda(target.getBaseName());
-
-        output = LambdaUtil.copyResource("lambda/manage.sh")
-                .replace("${lambdaName}", lambdaName);
-        LambdaUtil.writeFile(target, "manage.sh", output);
-
-        output = LambdaUtil.copyResource("lambda/sam.jvm.yaml")
-                .replace("${lambdaName}", lambdaName);
-        LambdaUtil.writeFile(target, "sam.jvm.yaml", output);
-
-        output = LambdaUtil.copyResource("lambda/sam.native.yaml")
-                .replace("${lambdaName}", lambdaName);
-        LambdaUtil.writeFile(target, "sam.native.yaml", output);
     }
 
 }

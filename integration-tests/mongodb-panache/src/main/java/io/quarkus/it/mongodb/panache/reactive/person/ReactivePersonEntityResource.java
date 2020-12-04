@@ -1,10 +1,11 @@
 package io.quarkus.it.mongodb.panache.reactive.person;
 
 import java.net.URI;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import javax.ws.rs.*;
-import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
 import io.quarkus.it.mongodb.panache.person.PersonName;
@@ -12,8 +13,6 @@ import io.quarkus.panache.common.Sort;
 import io.smallrye.mutiny.Uni;
 
 @Path("/reactive/persons/entity")
-@Produces(MediaType.APPLICATION_JSON)
-@Consumes(MediaType.APPLICATION_JSON)
 public class ReactivePersonEntityResource {
     @GET
     public Uni<List<ReactivePersonEntity>> getPersons(@QueryParam("sort") String sort) {
@@ -25,8 +24,12 @@ public class ReactivePersonEntityResource {
 
     @GET
     @Path("/search/{name}")
-    public Uni<List<PersonName>> searchPersons(@PathParam("name") String name) {
-        return ReactivePersonEntity.find("lastname", name).project(PersonName.class).list();
+    public Set<PersonName> searchPersons(@PathParam("name") String name) {
+        Set<PersonName> uniqueNames = new HashSet<>();
+        List<PersonName> lastnames = ReactivePersonEntity.find("lastname", name).project(PersonName.class).list().await()
+                .indefinitely();
+        lastnames.forEach(p -> uniqueNames.add(p));// this will throw if it's not the right type
+        return uniqueNames;
     }
 
     @POST

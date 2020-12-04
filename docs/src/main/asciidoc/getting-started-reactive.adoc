@@ -28,13 +28,13 @@ To complete this guide, you need:
 
 == Solutions
 
-We recommend that you follow the instructions from <<bootstrapping-the-project,Boostrapping project>> and onwards to create the application step by step.
+We recommend that you follow the instructions from <<bootstrapping-the-project,Bootstrapping project>> and onwards to create the application step by step.
 
 However, you can go right to the completed example.
 
 Download an {quickstarts-archive-url}[archive] or clone the git repository:
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 git clone {quickstarts-clone-url}
 ----
@@ -143,7 +143,7 @@ client = WebClient.create(vertx,
 Uni<JsonObject> uni =
     client.get("/api/fruit/" + name)
         .send()
-        .onItem().apply(resp -> {
+        .onItem().transform(resp -> {
             if (resp.statusCode() == 200) {
                 return resp.bodyAsJsonObject();
             } else {
@@ -164,14 +164,14 @@ The easiest way to create a new Quarkus project is to open a terminal and run th
 
 For Linux and macOS users
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectGroupId=org.acme \
     -DprojectArtifactId=getting-started-reactive \
     -DclassName="org.acme.quickstart.ReactiveGreetingResource" \
     -Dpath="/hello" \
-    -Dextensions="resteasy-mutiny, resteasy-jsonb"
+    -Dextensions="resteasy-mutiny, resteasy-jackson"
 cd getting-started-reactive
 ----
 
@@ -179,16 +179,16 @@ For Windows users
 
 - If using cmd, (don't use forward slash `\`)
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
-mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create -DprojectGroupId=org.acme -DprojectArtifactId=getting-started-reactive -DclassName="org.acme.quickstart.ReactiveGreetingResource" -Dpath="/hello" -Dextensions="resteasy-mutiny,resteasy-jsonb"
+mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create -DprojectGroupId=org.acme -DprojectArtifactId=getting-started-reactive -DclassName="org.acme.quickstart.ReactiveGreetingResource" -Dpath="/hello" -Dextensions="resteasy-mutiny,resteasy-jackson"
 ----
 
 - If using Powershell, wrap `-D` parameters in double quotes
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
-mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create "-DprojectGroupId=org.acme" "-DprojectArtifactId=getting-started-reactive" "-DclassName=org.acme.quickstart.ReactiveGreetingResource" "-Dpath=/hello" "-Dextensions=resteasy-mutiny,resteasy-jsonb"
+mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create "-DprojectGroupId=org.acme" "-DprojectArtifactId=getting-started-reactive" "-DclassName=org.acme.quickstart.ReactiveGreetingResource" "-Dpath=/hello" "-Dextensions=resteasy-mutiny,resteasy-jackson"
 ----
 
 It generates the following in  `./getting-started-reactive`:
@@ -200,7 +200,7 @@ It generates the following in  `./getting-started-reactive`:
 * example `Dockerfile` files for both `native` and `jvm` modes in `src/main/docker`
 * the application configuration file
 
-The generated `pom.xml` also declares the RESTEasy Mutiny support and RESTEasy JSON-B to serialize payloads.
+The generated `pom.xml` also declares the RESTEasy Mutiny support and RESTEasy Jackson to serialize payloads.
 
 === Reactive JAX-RS resources
 
@@ -245,7 +245,7 @@ public class ReactiveGreetingService {
 
     public Uni<String> greeting(String name) {
         return Uni.createFrom().item(name)
-                .onItem().apply(n -> String.format("hello %s", name));
+                .onItem().transform(n -> String.format("hello %s", n));
     }
 }
 ----
@@ -292,9 +292,27 @@ public class ReactiveGreetingResource {
 The `ReactiveGreetingService` class contains a straightforward method producing a `Uni`.
 While, in this example, the resulting item is emitted immediately, you can imagine any async API producing a `Uni`. We cover this later in this guide.
 
+NOTE: In order to get Mutiny working properly with JAX-RS resources, make sure the Mutiny support for RESTEasy extension (`io.quarkus:quarkus-resteasy-mutiny`) is present, otherwise add the extension by executing the following command:
+
+[source,bash,subs=attributes+]
+----
+mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:add-extensions \
+    -Dextensions="io.quarkus:quarkus-resteasy-mutiny"
+----
+
+Or add `quarkus-resteasy-mutiny` into your dependencies manually.
+
+[source, xml]
+----
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-resteasy-mutiny</artifactId>
+    </dependency>
+----
+
 Now, start the application using:
 
-[source, shell]
+[source,bash]
 ----
 ./mvnw quarkus:dev
 ----
@@ -312,7 +330,7 @@ In the `ReactiveGreetingService`, add the following method:
 ----
 public Multi<String> greetings(int count, String name) {
   return Multi.createFrom().ticks().every(Duration.ofSeconds(1))
-        .onItem().apply(n -> String.format("hello %s - %d", name, n))
+        .onItem().transform(n -> String.format("hello %s - %d", name, n))
         .transform().byTakingFirstItems(count);
 }
 ----
@@ -335,7 +353,8 @@ This endpoint streams the items to the client as a JSON Array.
 The name and number of messages are parameterized using path parameters.
 
 So calling the endpoint produces something like:
-[source, shell]
+
+[source,shell]
 ----
 $ curl http://localhost:8080/hello/greeting/3/neo
 ["hello neo - 0","hello neo - 1","hello neo - 2"]
@@ -359,7 +378,7 @@ As the `@Produces` annotation defines `SERVER_SENT_EVENTS`, JAX-RS needs it to k
 
 You can see the result using:
 
-[source, shell]
+[source,shell]
 ----
 $ curl -N http://localhost:8080/hello/stream/5/neo
 data: hello neo - 0
@@ -382,20 +401,20 @@ In this section, we are going to see how you can use the Reactive PostgreSQL dri
 
 Create a new project using:
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectGroupId=org.acme \
     -DprojectArtifactId=getting-started-reactive-crud \
     -DclassName="org.acme.reactive.crud.FruitResource" \
     -Dpath="/fruits" \
-    -Dextensions="resteasy-mutiny, resteasy-jsonb, reactive-pg-client"
+    -Dextensions="resteasy-mutiny, resteasy-jackson, reactive-pg-client"
 cd getting-started-reactive-crud
 ----
 
 This application is interacting with a PostgreSQL database, so you need one:
 
-[source, shell]
+[source,bash]
 ----
 docker run --ulimit memlock=-1:-1 -it --rm=true --memory-swappiness=0 \
            --name postgres-quarkus-reactive -e POSTGRES_USER=quarkus_test \
@@ -456,30 +475,30 @@ public class Fruit {
     public static Multi<Fruit> findAll(PgPool client) {
         return client.query("SELECT id, name FROM fruits ORDER BY name ASC").execute()
                 // Create a Multi from the set of rows:
-                .onItem().produceMulti(set -> Multi.createFrom().items(() -> StreamSupport.stream(set.spliterator(), false)))
+                .onItem().transformToMulti(set -> Multi.createFrom().items(() -> StreamSupport.stream(set.spliterator(), false)))
                 // For each row create a fruit instance
-                .onItem().apply(Fruit::from);
+                .onItem().transform(Fruit::from);
     }
 
     public static Uni<Fruit> findById(PgPool client, Long id) {
-        return client.preparedQuery("SELECT id, name FROM fruits WHERE id = $1", Tuple.of(id)).execute()
-                .onItem().apply(RowSet::iterator)
-                .onItem().apply(iterator -> iterator.hasNext() ? from(iterator.next()) : null);
+        return client.preparedQuery("SELECT id, name FROM fruits WHERE id = $1").execute(Tuple.of(id))
+                .onItem().transform(RowSet::iterator)
+                .onItem().transform(iterator -> iterator.hasNext() ? from(iterator.next()) : null);
     }
 
     public Uni<Long> save(PgPool client) {
-        return client.preparedQuery("INSERT INTO fruits (name) VALUES ($1) RETURNING (id)", Tuple.of(name)).execute()
-                .onItem().apply(pgRowSet -> pgRowSet.iterator().next().getLong("id"));
+        return client.preparedQuery("INSERT INTO fruits (name) VALUES ($1) RETURNING (id)").execute(Tuple.of(name))
+                .onItem().transform(pgRowSet -> pgRowSet.iterator().next().getLong("id"));
     }
 
     public Uni<Boolean> update(PgPool client) {
-        return client.preparedQuery("UPDATE fruits SET name = $1 WHERE id = $2", Tuple.of(name, id)).execute()
-                .onItem().apply(pgRowSet -> pgRowSet.rowCount() == 1);
+        return client.preparedQuery("UPDATE fruits SET name = $1 WHERE id = $2").execute(Tuple.of(name, id))
+                .onItem().transform(pgRowSet -> pgRowSet.rowCount() == 1);
     }
 
     public static Uni<Boolean> delete(PgPool client, Long id) {
-        return client.preparedQuery("DELETE FROM fruits WHERE id = $1", Tuple.of(id)).execute()
-                .onItem().apply(pgRowSet -> pgRowSet.rowCount() == 1);
+        return client.preparedQuery("DELETE FROM fruits WHERE id = $1").execute(Tuple.of(id))
+                .onItem().transform(pgRowSet -> pgRowSet.rowCount() == 1);
     }
 
     private static Fruit from(Row row) {
@@ -522,8 +541,6 @@ import javax.ws.rs.core.Response.Status;
 import java.net.URI;
 
 @Path("fruits")
-@Produces(MediaType.APPLICATION_JSON)
-@Consumes(MediaType.APPLICATION_JSON)
 public class FruitResource {
 
     @Inject
@@ -559,31 +576,31 @@ public class FruitResource {
     @Path("{id}")
     public Uni<Response> getSingle(@PathParam Long id) {
         return Fruit.findById(client, id)
-                .onItem().apply(fruit -> fruit != null ? Response.ok(fruit) : Response.status(Status.NOT_FOUND))
-                .onItem().apply(ResponseBuilder::build);
+                .onItem().transform(fruit -> fruit != null ? Response.ok(fruit) : Response.status(Status.NOT_FOUND))
+                .onItem().transform(ResponseBuilder::build);
     }
 
     @POST
     public Uni<Response> create(Fruit fruit) {
         return fruit.save(client)
-                .onItem().apply(id -> URI.create("/fruits/" + id))
-                .onItem().apply(uri -> Response.created(uri).build());
+                .onItem().transform(id -> URI.create("/fruits/" + id))
+                .onItem().transform(uri -> Response.created(uri).build());
     }
 
     @PUT
     @Path("{id}")
     public Uni<Response> update(@PathParam Long id, Fruit fruit) {
         return fruit.update(client)
-                .onItem().apply(updated -> updated ? Status.OK : Status.NOT_FOUND)
-                .onItem().apply(status -> Response.status(status).build());
+                .onItem().transform(updated -> updated ? Status.OK : Status.NOT_FOUND)
+                .onItem().transform(status -> Response.status(status).build());
     }
 
     @DELETE
     @Path("{id}")
     public Uni<Response> delete(@PathParam Long id) {
         return Fruit.delete(client, id)
-                .onItem().apply(deleted -> deleted ? Status.NO_CONTENT : Status.NOT_FOUND)
-                .onItem().apply(status -> Response.status(status).build());
+                .onItem().transform(deleted -> deleted ? Status.NO_CONTENT : Status.NOT_FOUND)
+                .onItem().transform(status -> Response.status(status).build());
     }
 }
 ----
@@ -594,6 +611,25 @@ This resource returns `Uni` and `Multi` instances based on the result produced b
 
 The previous example uses a _service_ provided by Quarkus.
 Also, you can use Vert.x clients directly.
+
+First of all, make sure the `quarkus-vertx` extension is present. If not, activate the extension by executing the following command:
+
+[source,bash,subs=attributes+]
+----
+mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:add-extensions \
+    -Dextensions=vertx
+----
+
+Or add `quarkus-vertx` into your dependencies manually.
+
+[source, xml]
+----
+<dependency>
+	<groupId>io.quarkus</groupId>
+	<artifactId>quarkus-vertx</artifactId>
+</dependency>
+----
+
 There is a Mutiny version of the Vert.x APIs.
 This API is divided into several artifacts you can import independently:
 

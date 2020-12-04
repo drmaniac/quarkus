@@ -8,7 +8,7 @@ import java.util.Optional;
 import io.dekorate.kubernetes.annotation.ImagePullPolicy;
 import io.dekorate.kubernetes.annotation.ServiceType;
 
-public interface PlatformConfiguration {
+public interface PlatformConfiguration extends EnvVarHolder {
 
     Optional<String> getPartOf();
 
@@ -16,13 +16,13 @@ public interface PlatformConfiguration {
 
     Optional<String> getVersion();
 
+    Optional<String> getNamespace();
+
     Map<String, String> getLabels();
 
     Map<String, String> getAnnotations();
 
     boolean isAddBuildTimestamp();
-
-    Map<String, EnvConfig> getEnvVars();
 
     Optional<String> getWorkingDir();
 
@@ -46,6 +46,8 @@ public interface PlatformConfiguration {
 
     ProbeConfig getReadinessProbe();
 
+    PrometheusConfig getPrometheusConfig();
+
     Map<String, MountConfig> getMounts();
 
     Map<String, SecretVolumeConfig> getSecretVolumes();
@@ -64,7 +66,11 @@ public interface PlatformConfiguration {
 
     Map<String, ContainerConfig> getInitContainers();
 
-    Map<String, ContainerConfig> getContainers();
+    Map<String, ContainerConfig> getSidecars();
+
+    Map<String, HostAliasConfig> getHostAliases();
+
+    ResourcesConfig getResources();
 
     default boolean isExpose() {
         return false;

@@ -37,7 +37,7 @@ The solution is located in the `spring-di-quickstart` {quickstarts-tree-url}/spr
 
 First, we need a new project. Create a new project with the following command:
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectGroupId=org.acme \
@@ -49,6 +49,24 @@ cd spring-di-quickstart
 ----
 
 This command generates a Maven project with a REST endpoint and imports the `spring-di` extension.
+
+If you already have your Quarkus project configured, you can add the `spring-di` extension
+to your project by running the following command in your project base directory:
+
+[source,bash]
+----
+./mvnw quarkus:add-extension -Dextensions="spring-di"
+----
+
+This will add the following to your `pom.xml`:
+
+[source,xml]
+----
+<dependency>
+    <groupId>io.quarkus</groupId>
+    <artifactId>quarkus-spring-di</artifactId>
+</dependency>
+----
 
 == Add beans using Spring annotations
 
@@ -112,7 +130,7 @@ public class NoOpSingleStringFunction implements StringFunction {
 Quarkus also provides support for injecting configuration values using Spring's `@Value` annotation.
 To see that in action, first edit the `src/main/resources/application.properties` with the following content:
 
-[source,java]
+[source,properties]
 ----
 # Your configuration properties
 greeting.message = hello
@@ -312,3 +330,5 @@ Quarkus has more Spring compatibility features. See the following guides for mor
 * link:spring-security[Quarkus - Extension for Spring Security]
 * link:spring-cloud-config-client[Quarkus - Reading properties from Spring Cloud Config Server]
 * link:spring-boot-properties[Quarkus - Extension for Spring Boot properties]
+* link:spring-cache[Quarkus - Extension for Spring Cache]
+* link:spring-scheduled[Quarkus - Extension for Spring Scheduled]

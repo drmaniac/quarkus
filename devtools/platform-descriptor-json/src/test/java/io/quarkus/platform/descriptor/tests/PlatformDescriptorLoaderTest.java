@@ -1,16 +1,14 @@
 package io.quarkus.platform.descriptor.tests;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
-import java.util.Collections;
-import java.util.List;
 import java.util.function.Function;
 
-import org.apache.maven.model.Dependency;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.platform.descriptor.loader.json.ArtifactResolver;
@@ -32,12 +30,6 @@ class PlatformDescriptorLoaderTest {
             public <T> T process(String groupId, String artifactId, String classifier, String type, String version,
                     Function<Path, T> processor) {
                 throw new UnsupportedOperationException();
-            }
-
-            @Override
-            public List<Dependency> getManagedDependencies(String groupId, String artifactId, String classifier,
-                    String type, String version) {
-                return Collections.emptyList();
             }
         };
 
@@ -64,13 +56,10 @@ class PlatformDescriptorLoaderTest {
         };
 
         QuarkusJsonPlatformDescriptor load = qpd.load(context);
-
         assertNotNull(load);
-
         assertEquals(85, load.getExtensions().size());
-
         assertEquals(1, load.getCategories().size());
-
+        assertThat(load.getMetadata()).containsKeys("application-properties", "maven", "gradle");
     }
 
 }

@@ -1,5 +1,7 @@
 package io.quarkus.flyway.runtime;
 
+import java.util.Arrays;
+
 import javax.sql.DataSource;
 
 import org.flywaydb.core.Flyway;
@@ -21,18 +23,52 @@ class FlywayCreator {
     public Flyway createFlyway(DataSource dataSource) {
         FluentConfiguration configure = Flyway.configure();
         configure.dataSource(dataSource);
-        flywayRuntimeConfig.connectRetries.ifPresent(configure::connectRetries);
-        flywayRuntimeConfig.schemas.ifPresent(list -> configure.schemas(list.toArray(EMPTY_ARRAY)));
-        flywayRuntimeConfig.table.ifPresent(configure::table);
+        if (flywayRuntimeConfig.connectRetries.isPresent()) {
+            configure.connectRetries(flywayRuntimeConfig.connectRetries.getAsInt());
+        }
+        if (flywayRuntimeConfig.schemas.isPresent()) {
+            configure.schemas(flywayRuntimeConfig.schemas.get().toArray(EMPTY_ARRAY));
+        }
+        if (flywayRuntimeConfig.table.isPresent()) {
+            configure.table(flywayRuntimeConfig.table.get());
+        }
         configure.locations(flywayBuildTimeConfig.locations.toArray(EMPTY_ARRAY));
-        flywayRuntimeConfig.sqlMigrationPrefix.ifPresent(configure::sqlMigrationPrefix);
-        flywayRuntimeConfig.repeatableSqlMigrationPrefix.ifPresent(configure::repeatableSqlMigrationPrefix);
+        if (flywayRuntimeConfig.sqlMigrationPrefix.isPresent()) {
+            configure.sqlMigrationPrefix(flywayRuntimeConfig.sqlMigrationPrefix.get());
+        }
+        if (flywayRuntimeConfig.repeatableSqlMigrationPrefix.isPresent()) {
+            configure.repeatableSqlMigrationPrefix(flywayRuntimeConfig.repeatableSqlMigrationPrefix.get());
+        }
         configure.baselineOnMigrate(flywayRuntimeConfig.baselineOnMigrate);
         configure.validateOnMigrate(flywayRuntimeConfig.validateOnMigrate);
+        configure.ignoreMissingMigrations(flywayRuntimeConfig.ignoreMissingMigrations);
         configure.outOfOrder(flywayRuntimeConfig.outOfOrder);
-        flywayRuntimeConfig.baselineVersion.ifPresent(configure::baselineVersion);
-        flywayRuntimeConfig.baselineDescription.ifPresent(configure::baselineDescription);
+        if (flywayRuntimeConfig.baselineVersion.isPresent()) {
+            configure.baselineVersion(flywayRuntimeConfig.baselineVersion.get());
+        }
+        if (flywayRuntimeConfig.baselineDescription.isPresent()) {
+            configure.baselineDescription(flywayRuntimeConfig.baselineDescription.get());
+        }
         configure.placeholders(flywayRuntimeConfig.placeholders);
+        configure.createSchemas(flywayRuntimeConfig.createSchemas);
+        if (flywayRuntimeConfig.placeholderPrefix.isPresent()) {
+            configure.placeholderPrefix(flywayRuntimeConfig.placeholderPrefix.get());
+        }
+        if (flywayRuntimeConfig.placeholderSuffix.isPresent()) {
+            configure.placeholderSuffix(flywayRuntimeConfig.placeholderSuffix.get());
+        }
+
+        /*
+         * Ensure that no classpath scanning takes place by setting the ClassProvider and the ResourceProvider
+         * (see Flyway#createResourceAndClassProviders)
+         */
+
+        // the static fields of this class have already been set at static-init
+        QuarkusPathLocationScanner quarkusPathLocationScanner = new QuarkusPathLocationScanner(
+                Arrays.asList(configure.getLocations()));
+        configure.javaMigrationClassProvider(new QuarkusFlywayClassProvider<>(quarkusPathLocationScanner.scanForClasses()));
+        configure.resourceProvider(new QuarkusFlywayResourceProvider(quarkusPathLocationScanner.scanForResources()));
+
         return configure.load();
     }
 }

@@ -7,18 +7,21 @@ import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
 import org.apache.maven.model.Dependency;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import io.quarkus.dependencies.Category;
 import io.quarkus.dependencies.Extension;
+import io.quarkus.devtools.messagewriter.MessageWriter;
 import io.quarkus.platform.descriptor.QuarkusPlatformDescriptor;
 import io.quarkus.platform.descriptor.ResourceInputStreamConsumer;
+import io.quarkus.platform.descriptor.ResourcePathConsumer;
 import io.quarkus.platform.descriptor.loader.json.ResourceLoader;
-import io.quarkus.platform.tools.DefaultMessageWriter;
-import io.quarkus.platform.tools.MessageWriter;
 
 public class QuarkusJsonPlatformDescriptor implements QuarkusPlatformDescriptor, Serializable {
 
@@ -28,8 +31,8 @@ public class QuarkusJsonPlatformDescriptor implements QuarkusPlatformDescriptor,
     private String quarkusVersion;
 
     private List<Extension> extensions = Collections.emptyList();
-    private List<Dependency> managedDeps = Collections.emptyList();
     private List<Category> categories = Collections.emptyList();
+    private Map<String, Object> metadata = Collections.emptyMap();
     private transient ResourceLoader resourceLoader;
     private transient MessageWriter log;
 
@@ -50,8 +53,8 @@ public class QuarkusJsonPlatformDescriptor implements QuarkusPlatformDescriptor,
         this.extensions = extensions;
     }
 
-    void setManagedDependencies(List<Dependency> managedDeps) {
-        this.managedDeps = managedDeps;
+    public void setMetadata(Map<String, Object> metadata) {
+        this.metadata = metadata;
     }
 
     void setResourceLoader(ResourceLoader resourceLoader) {
@@ -67,7 +70,7 @@ public class QuarkusJsonPlatformDescriptor implements QuarkusPlatformDescriptor,
     }
 
     private MessageWriter getLog() {
-        return log == null ? log = new DefaultMessageWriter() : log;
+        return log == null ? log = MessageWriter.info() : log;
     }
 
     @Override
@@ -91,13 +94,19 @@ public class QuarkusJsonPlatformDescriptor implements QuarkusPlatformDescriptor,
     }
 
     @Override
-    public List<Dependency> getManagedDependencies() {
-        return managedDeps;
+    public List<Extension> getExtensions() {
+        return extensions;
     }
 
     @Override
-    public List<Extension> getExtensions() {
-        return extensions;
+    public Map<String, Object> getMetadata() {
+        return metadata;
+    }
+
+    @Override
+    @JsonIgnore
+    public List<Dependency> getManagedDependencies() {
+        throw new UnsupportedOperationException();
     }
 
     @Override
@@ -124,6 +133,15 @@ public class QuarkusJsonPlatformDescriptor implements QuarkusPlatformDescriptor,
             throw new IllegalStateException("Resource loader has not been provided");
         }
         return resourceLoader.loadResource(name, consumer);
+    }
+
+    @Override
+    public <T> T loadResourceAsPath(String name, ResourcePathConsumer<T> consumer) throws IOException {
+        getLog().debug("Loading Quarkus platform resource %s", name);
+        if (resourceLoader == null) {
+            throw new IllegalStateException("Resource loader has not been provided");
+        }
+        return resourceLoader.loadResourceAsPath(name, consumer);
     }
 
     @Override

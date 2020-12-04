@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 
 import javax.annotation.PreDestroy;
 import javax.annotation.Priority;
+import javax.enterprise.event.Event;
 import javax.enterprise.event.Observes;
 import javax.enterprise.inject.Typed;
 import javax.inject.Singleton;
@@ -33,8 +34,10 @@ import com.cronutils.parser.CronParser;
 
 import io.quarkus.runtime.StartupEvent;
 import io.quarkus.scheduler.Scheduled;
+import io.quarkus.scheduler.Scheduled.ConcurrentExecution;
 import io.quarkus.scheduler.ScheduledExecution;
 import io.quarkus.scheduler.Scheduler;
+import io.quarkus.scheduler.SkippedExecution;
 import io.quarkus.scheduler.Trigger;
 
 @Typed(Scheduler.class)
@@ -50,14 +53,21 @@ public class SimpleScheduler implements Scheduler {
     private final ExecutorService executor;
     private volatile boolean running;
     private final List<ScheduledTask> scheduledTasks;
+    private final boolean enabled;
 
-    public SimpleScheduler(SchedulerContext context, Config config) {
+    public SimpleScheduler(SchedulerContext context, Config config, SchedulerRuntimeConfig schedulerRuntimeConfig,
+            Event<SkippedExecution> skippedExecutionEvent) {
         this.running = true;
+        this.enabled = schedulerRuntimeConfig.enabled;
         this.scheduledTasks = new ArrayList<>();
         this.executor = context.getExecutor();
 
-        if (context.getScheduledMethods().isEmpty()) {
+        if (!schedulerRuntimeConfig.enabled) {
             this.scheduledExecutor = null;
+            LOGGER.info("Simple scheduler is disabled by config property and will not be started");
+        } else if (context.getScheduledMethods().isEmpty()) {
+            this.scheduledExecutor = null;
+            LOGGER.info("No scheduled business methods found - Simple scheduler will not be started");
         } else {
             this.scheduledExecutor = new JBossScheduledThreadPoolExecutor(1, new Runnable() {
                 @Override
@@ -70,12 +80,15 @@ public class SimpleScheduler implements Scheduler {
             CronParser parser = new CronParser(definition);
 
             for (ScheduledMethodMetadata method : context.getScheduledMethods()) {
-                ScheduledInvoker invoker = context.createInvoker(method.getInvokerClassName());
                 int nameSequence = 0;
                 for (Scheduled scheduled : method.getSchedules()) {
                     nameSequence++;
                     SimpleTrigger trigger = createTrigger(method.getInvokerClassName(), parser, scheduled, nameSequence,
                             config);
+                    ScheduledInvoker invoker = context.createInvoker(method.getInvokerClassName());
+                    if (scheduled.concurrentExecution() == ConcurrentExecution.SKIP) {
+                        invoker = new SkipConcurrentExecutionInvoker(invoker, skippedExecutionEvent);
+                    }
                     scheduledTasks.add(new ScheduledTask(trigger, invoker));
                 }
             }
@@ -109,40 +122,35 @@ public class SimpleScheduler implements Scheduler {
     void checkTriggers() {
         if (!running) {
             LOGGER.trace("Skip all triggers - scheduler paused");
+            return;
         }
         ZonedDateTime now = ZonedDateTime.now();
-
         for (ScheduledTask task : scheduledTasks) {
-            LOGGER.tracef("Evaluate trigger %s", task.trigger);
-            ZonedDateTime scheduledFireTime = task.trigger.evaluate(now);
-            if (scheduledFireTime != null) {
-                try {
-                    executor.execute(new Runnable() {
-                        @Override
-                        public void run() {
-                            try {
-                                task.invoker.invoke(new SimpleScheduledExecution(now, scheduledFireTime, task.trigger));
-                            } catch (Throwable t) {
-                                LOGGER.errorf(t, "Error occured while executing task for trigger %s", task.trigger);
-                            }
-                        }
-                    });
-                    LOGGER.debugf("Executing scheduled task for trigger %s", task.trigger);
-                } catch (RejectedExecutionException e) {
-                    LOGGER.warnf("Rejected execution of a scheduled task for trigger %s", task.trigger);
-                }
-            }
+            task.execute(now, executor);
         }
     }
 
     @Override
     public void pause() {
-        running = false;
+        if (!enabled) {
+            LOGGER.warn("Scheduler is disabled and cannot be paused");
+        } else {
+            running = false;
+        }
     }
 
     @Override
     public void resume() {
-        running = true;
+        if (!enabled) {
+            LOGGER.warn("Scheduler is disabled and cannot be resumed");
+        } else {
+            running = true;
+        }
+    }
+
+    @Override
+    public boolean isRunning() {
+        return enabled && running;
     }
 
     SimpleTrigger createTrigger(String invokerClass, CronParser parser, Scheduled scheduled, int nameSequence, Config config) {
@@ -203,9 +211,30 @@ public class SimpleScheduler implements Scheduler {
         final SimpleTrigger trigger;
         final ScheduledInvoker invoker;
 
-        public ScheduledTask(SimpleTrigger trigger, ScheduledInvoker invoker) {
+        ScheduledTask(SimpleTrigger trigger, ScheduledInvoker invoker) {
             this.trigger = trigger;
             this.invoker = invoker;
+        }
+
+        void execute(ZonedDateTime now, ExecutorService executor) {
+            ZonedDateTime scheduledFireTime = trigger.evaluate(now);
+            if (scheduledFireTime != null) {
+                try {
+                    executor.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                invoker.invoke(new SimpleScheduledExecution(now, scheduledFireTime, trigger));
+                            } catch (Throwable t) {
+                                LOGGER.errorf(t, "Error occured while executing task for trigger %s", trigger);
+                            }
+                        }
+                    });
+                    LOGGER.debugf("Executing scheduled task for trigger %s", trigger);
+                } catch (RejectedExecutionException e) {
+                    LOGGER.warnf("Rejected execution of a scheduled task for trigger %s", trigger);
+                }
+            }
         }
 
     }

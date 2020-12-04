@@ -7,6 +7,7 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLStreamHandler;
+import java.nio.file.Path;
 import java.security.CodeSource;
 import java.security.ProtectionDomain;
 import java.security.cert.Certificate;
@@ -41,6 +42,11 @@ public class MemoryClassPathElement extends AbstractClassPathElement {
     }
 
     @Override
+    public Path getRoot() {
+        return null;
+    }
+
+    @Override
     public ClassPathResource getResource(String name) {
         byte[] res = resources.get(name);
         if (res == null) {
@@ -72,6 +78,11 @@ public class MemoryClassPathElement extends AbstractClassPathElement {
             @Override
             public byte[] getData() {
                 return res;
+            }
+
+            @Override
+            public boolean isDirectory() {
+                return false;
             }
         };
     }

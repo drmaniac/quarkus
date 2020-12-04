@@ -37,7 +37,7 @@ The solution is located in the `lifecycle-quickstart` {quickstarts-tree-url}/lif
 
 First, we need a new project. Create a new project with the following command:
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectGroupId=org.acme \
@@ -58,7 +58,7 @@ It generates:
 
 == The main method
 
-By default Quarkus will automatically generate a main method, that will boostrap Quarkus and then just wait for
+By default Quarkus will automatically generate a main method, that will bootstrap Quarkus and then just wait for
 shutdown to be initiated. Let's provide our own main method:
 [source,java]
 ----

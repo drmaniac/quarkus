@@ -25,7 +25,6 @@ import java.util.Set;
 import java.util.function.BooleanSupplier;
 
 import javax.enterprise.context.ApplicationScoped;
-import javax.inject.Inject;
 import javax.xml.bind.JAXBContext;
 import javax.xml.bind.JAXBException;
 import javax.xml.bind.Unmarshaller;
@@ -81,9 +80,6 @@ public final class TestProcessor {
     static DotName TEST_ANNOTATION = DotName.createSimple(TestAnnotation.class.getName());
     static DotName TEST_ANNOTATION_SCOPE = DotName.createSimple(ApplicationScoped.class.getName());
 
-    @Inject
-    BuildProducer<NativeImageResourceBuildItem> resource;
-
     TestConfigRoot configRoot;
     TestBuildTimeConfig buildTimeConfig;
     TestBuildAndRunTimeConfig buildAndRunTimeConfig;
@@ -125,7 +121,7 @@ public final class TestProcessor {
     }
 
     @BuildStep
-    void registerNativeImageResources() {
+    void registerNativeImageResources(BuildProducer<NativeImageResourceBuildItem> resource) {
         resource.produce(new NativeImageResourceBuildItem("/DSAPublicKey.encoded"));
     }
 
@@ -275,14 +271,14 @@ public final class TestProcessor {
                     + buildTimeConfig.btStringOptWithDefault);
         }
         if (!buildTimeConfig.allValues.oov.equals(new ObjectOfValue("configPart1", "configPart2"))) {
-            throw new IllegalStateException("buildTimeConfig.oov != configPart1+onfigPart2; " + buildTimeConfig.allValues.oov);
+            throw new IllegalStateException("buildTimeConfig.oov != configPart1+configPart2; " + buildTimeConfig.allValues.oov);
         }
         if (!buildTimeConfig.allValues.oovWithDefault.equals(new ObjectOfValue("defaultPart1", "defaultPart2"))) {
             throw new IllegalStateException(
                     "buildTimeConfig.oovWithDefault != defaultPart1+defaultPart2; " + buildTimeConfig.allValues.oovWithDefault);
         }
         if (!buildTimeConfig.allValues.ovo.equals(new ObjectValueOf("configPart1", "configPart2"))) {
-            throw new IllegalStateException("buildTimeConfig.oov != configPart1+onfigPart2; " + buildTimeConfig.allValues.oov);
+            throw new IllegalStateException("buildTimeConfig.oov != configPart1+configPart2; " + buildTimeConfig.allValues.oov);
         }
         if (!buildTimeConfig.allValues.ovoWithDefault.equals(new ObjectValueOf("defaultPart1", "defaultPart2"))) {
             throw new IllegalStateException(

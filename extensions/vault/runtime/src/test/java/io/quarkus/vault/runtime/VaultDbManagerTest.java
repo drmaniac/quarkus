@@ -1,19 +1,20 @@
 package io.quarkus.vault.runtime;
 
-import static io.quarkus.vault.CredentialsProvider.PASSWORD_PROPERTY_NAME;
-import static io.quarkus.vault.CredentialsProvider.USER_PROPERTY_NAME;
+import static io.quarkus.credentials.CredentialsProvider.PASSWORD_PROPERTY_NAME;
+import static io.quarkus.credentials.CredentialsProvider.USER_PROPERTY_NAME;
 import static java.time.Instant.EPOCH;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Optional;
-import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.Test;
 
+import io.quarkus.runtime.TlsConfig;
 import io.quarkus.vault.runtime.client.OkHttpVaultClient;
 import io.quarkus.vault.runtime.client.VaultClientException;
 import io.quarkus.vault.runtime.client.dto.database.VaultDatabaseCredentials;
@@ -30,6 +31,7 @@ import io.quarkus.vault.runtime.config.VaultUserpassAuthenticationConfig;
 public class VaultDbManagerTest {
 
     VaultRuntimeConfig config = createConfig();
+    TlsConfig tlsConfig = new TlsConfig();
     VaultDatabaseCredentials credentials = new VaultDatabaseCredentials();
     VaultLeasesLookup vaultLeasesLookup = new VaultLeasesLookup();
     AtomicBoolean lookupLeaseShouldReturn400 = new AtomicBoolean(false);
@@ -54,7 +56,7 @@ public class VaultDbManagerTest {
         vaultRenewLease.leaseDurationSecs = 10;
         vaultRenewLease.renewable = true;
 
-        Properties properties = vaultDbManager.getDynamicDbCredentials(mydbrole);
+        Map<String, String> properties = vaultDbManager.getDynamicDbCredentials(mydbrole);
         assertEquals("bob", properties.get(USER_PROPERTY_NAME));
         assertEquals("sinclair1", properties.get(PASSWORD_PROPERTY_NAME));
 
@@ -113,7 +115,7 @@ public class VaultDbManagerTest {
             config.authentication.userpass.passwordWrappingToken = Optional.empty();
             config.connectTimeout = Duration.ofSeconds(1);
             config.readTimeout = Duration.ofSeconds(1);
-            config.tls.skipVerify = true;
+            config.tls.skipVerify = Optional.of(true);
             config.logConfidentialityLevel = LogConfidentialityLevel.LOW;
             config.renewGracePeriod = Duration.ofSeconds(3);
             return config;
@@ -123,7 +125,7 @@ public class VaultDbManagerTest {
     }
 
     private OkHttpVaultClient createVaultClient() {
-        return new OkHttpVaultClient(config) {
+        return new OkHttpVaultClient(config, tlsConfig) {
             @Override
             public VaultDatabaseCredentials generateDatabaseCredentials(String token, String databaseCredentialsRole) {
                 return credentials;

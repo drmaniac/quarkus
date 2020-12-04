@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 
+import com.mongodb.client.model.Collation;
+
 import io.quarkus.panache.common.Page;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
@@ -25,7 +27,7 @@ public interface ReactivePanacheQuery<Entity> {
      * Defines a projection class: the getters, and the public fields, will be used to restrict which fields should be
      * retrieved from the database.
      *
-     * @return this query, modified
+     * @return @return a new query with the same state as the previous one (params, page, range, ...).
      */
     public <T> ReactivePanacheQuery<T> project(Class<T> type);
 
@@ -135,6 +137,14 @@ public interface ReactivePanacheQuery<Entity> {
      * @return this query, modified
      */
     public <T extends Entity> ReactivePanacheQuery<T> range(int startIndex, int lastIndex);
+
+    /**
+     * Define the collation used for this query.
+     *
+     * @param collation the collation to be used for this query.
+     * @return this query, modified
+     */
+    public <T extends Entity> ReactivePanacheQuery<T> withCollation(Collation collation);
 
     // Results
 

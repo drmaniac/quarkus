@@ -15,15 +15,17 @@ public class AccessLogConfig {
     public boolean enabled;
 
     /**
-     * The access log pattern:
+     * The access log pattern.
      *
-     * If this is the string 'common' or 'combined' then this will use one of the specified named formats:
+     * If this is the string `common`, `combined` or `long` then this will use one of the specified named formats:
      *
-     * common: %h %l %u %t "%r" %s %b
-     * combined: %h %l %u %t "%r" %s %b "%{i,Referer}" "%{i,User-Agent}"
+     * - common: `%h %l %u %t "%r" %s %b`
+     * - combined: `%h %l %u %t "%r" %s %b "%{i,Referer}" "%{i,User-Agent}"`
+     * - long: `%r\n%{ALL_REQUEST_HEADERS}`
      *
      * Otherwise consult the Quarkus documentation for the full list of variables that can be used.
      *
+     * @asciidoclet
      */
     @ConfigItem(defaultValue = "common")
     public String pattern;

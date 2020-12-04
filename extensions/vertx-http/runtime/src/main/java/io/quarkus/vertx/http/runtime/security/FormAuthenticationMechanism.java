@@ -13,6 +13,7 @@ import io.quarkus.security.credential.PasswordCredential;
 import io.quarkus.security.identity.IdentityProviderManager;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.security.identity.request.AuthenticationRequest;
+import io.quarkus.security.identity.request.TrustedAuthenticationRequest;
 import io.quarkus.security.identity.request.UsernamePasswordAuthenticationRequest;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.subscription.UniEmitter;
@@ -73,17 +74,22 @@ public class FormAuthenticationMechanism implements HttpAuthenticationMechanism 
                                     .subscribe().with(new Consumer<SecurityIdentity>() {
                                         @Override
                                         public void accept(SecurityIdentity identity) {
-                                            loginManager.save(identity, exchange, null);
-                                            if (redirectAfterLogin || exchange.getCookie(locationCookie) != null) {
-                                                handleRedirectBack(exchange);
-                                                //we  have authenticated, but we want to just redirect back to the original page
-                                                //so we don't actually authenticate the current request
-                                                //instead we have just set a cookie so the redirected request will be authenticated
-                                            } else {
-                                                exchange.response().setStatusCode(200);
-                                                exchange.response().end();
+                                            try {
+                                                loginManager.save(identity, exchange, null, exchange.request().isSSL());
+                                                if (redirectAfterLogin || exchange.getCookie(locationCookie) != null) {
+                                                    handleRedirectBack(exchange);
+                                                    //we  have authenticated, but we want to just redirect back to the original page
+                                                    //so we don't actually authenticate the current request
+                                                    //instead we have just set a cookie so the redirected request will be authenticated
+                                                } else {
+                                                    exchange.response().setStatusCode(200);
+                                                    exchange.response().end();
+                                                }
+                                                uniEmitter.complete(null);
+                                            } catch (Throwable t) {
+                                                log.error("Unable to complete post authentication", t);
+                                                uniEmitter.fail(t);
                                             }
-                                            uniEmitter.complete(null);
                                         }
                                     }, new Consumer<Throwable>() {
                                         @Override
@@ -105,6 +111,7 @@ public class FormAuthenticationMechanism implements HttpAuthenticationMechanism 
         Cookie redirect = exchange.getCookie(locationCookie);
         String location;
         if (redirect != null) {
+            redirect.setSecure(exchange.request().isSSL());
             location = redirect.getValue();
             exchange.response().addCookie(redirect.setMaxAge(0));
         } else {
@@ -116,7 +123,8 @@ public class FormAuthenticationMechanism implements HttpAuthenticationMechanism 
     }
 
     protected void storeInitialLocation(final RoutingContext exchange) {
-        exchange.response().addCookie(Cookie.cookie(locationCookie, exchange.request().absoluteURI()).setPath("/"));
+        exchange.response().addCookie(Cookie.cookie(locationCookie, exchange.request().absoluteURI())
+                .setPath("/").setSecure(exchange.request().isSSL()));
     }
 
     protected void servePage(final RoutingContext exchange, final String location) {
@@ -146,7 +154,7 @@ public class FormAuthenticationMechanism implements HttpAuthenticationMechanism 
             return ret.onItem().invoke(new Consumer<SecurityIdentity>() {
                 @Override
                 public void accept(SecurityIdentity securityIdentity) {
-                    loginManager.save(securityIdentity, context, result);
+                    loginManager.save(securityIdentity, context, result, context.request().isSSL());
                 }
             });
         }

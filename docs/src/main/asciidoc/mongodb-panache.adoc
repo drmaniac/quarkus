@@ -7,7 +7,6 @@ https://github.com/quarkusio/quarkus/tree/master/docs/src/main/asciidoc
 
 include::./attributes.adoc[]
 :config-file: application.properties
-:extension-status: preview
 :mongodb-doc-root-url: https://mongodb.github.io/mongo-java-driver/3.11
 
 MongoDB is a well known NoSQL Database that is widely used, but using its raw API can be cumbersome as you need to express your entities and your queries as a MongoDB link:{mongodb-doc-root-url}/bson/documents/#document[`Document`].
@@ -15,8 +14,6 @@ MongoDB is a well known NoSQL Database that is widely used, but using its raw AP
 MongoDB with Panache provides active record style entities (and repositories) like you have in link:hibernate-orm-panache[Hibernate ORM with Panache] and focuses on making your entities trivial and fun to write in Quarkus.
 
 It is built on top of the link:mongodb[MongoDB Client] extension.
-
-include::./status-include.adoc[]
 
 == First: an example
 
@@ -66,30 +63,28 @@ The solution is located in the `mongodb-panache-quickstart` {quickstarts-tree-ur
 
 First, we need a new project. Create a new project with the following command:
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectGroupId=org.acme \
     -DprojectArtifactId=mongodb-panache-quickstart \
     -DclassName="org.acme.mongodb.panache.PersonResource" \
     -Dpath="/persons" \
-    -Dextensions="resteasy-jsonb,mongodb-panache"
+    -Dextensions="resteasy-jackson,mongodb-panache"
 cd mongodb-panache-quickstart
 ----
 
-This command generates a Maven structure importing the RESTEasy/JAX-RS, JSON-B and MongoDB with Panache extensions.
+This command generates a Maven structure importing the RESTEasy/JAX-RS, Jackson and MongoDB with Panache extensions.
 After this, the `quarkus-mongodb-panache` extension has been added to your `pom.xml`.
 
-If you don't want to generate a new project you can add the dependency in your `pom.xml`:
+If you don't want to generate a new project, add the dependency in your `pom.xml`:
 
 [source,xml]
 ----
-<dependencies>
-    <dependency>
-        <groupId>io.quarkus</groupId>
-        <artifactId>quarkus-mongodb-panache</artifactId>
-    </dependency>
-</dependencies>
+<dependency>
+    <groupId>io.quarkus</groupId>
+    <artifactId>quarkus-mongodb-panache</artifactId>
+</dependency>
 ----
 
 == Setting up and configuring MongoDB with Panache
@@ -156,6 +151,8 @@ If you need to write accessors, you can:
 [source,java]
 ----
 public class Person extends PanacheMongoEntity {
+
+    @JsonProperty
     public String name;
     public LocalDate birth;
     public Status status;
@@ -187,7 +184,7 @@ person.name = "Loïc";
 person.birth = LocalDate.of(1910, Month.FEBRUARY, 1);
 person.status = Status.Alive;
 
-// persist it
+// persist it: if you keep the default ObjectId ID field, it will be populated by the MongoDB driver
 person.persist();
 
 person.status = Status.Dead;
@@ -202,6 +199,8 @@ person.delete();
 List<Person> allPersons = Person.listAll();
 
 // finding a specific person by ID
+// here we build a new ObjectId but you can also retrieve it from the existing entity after being persisted
+ObjectId personId = new ObjectId(idAsString);
 person = Person.findById(personId);
 
 // finding a specific person by ID via an Optional
@@ -353,7 +352,7 @@ person.name = "Loïc";
 person.birth = LocalDate.of(1910, Month.FEBRUARY, 1);
 person.status = Status.Alive;
 
-// persist it
+// persist it: if you keep the default ObjectId ID field, it will be populated by the MongoDB driver
 personRepository.persist(person);
 
 person.status = Status.Dead;
@@ -368,6 +367,8 @@ personRepository.delete(person);
 List<Person> allPersons = personRepository.listAll();
 
 // finding a specific person by ID
+// here we build a new ObjectId but you can also retrieve it from the existing entity after being persisted
+ObjectId personId = new ObjectId(idAsString);
 person = personRepository.findById(personId);
 
 // finding a specific person by ID via an Optional
@@ -502,7 +503,7 @@ MongoDB with Panache will then map it to a MongoDB native query.
 If your query does not start with `{`, we will consider it a PanacheQL query:
 
 - `<singlePropertyName>` (and single parameter) which will expand to `{'singleColumnName': '?1'}`
-- `<query>` will expand to `{<query>}` where we will map the PanacheQL query to MongoDB native query form. We support the following operators that will be mapped to the corresponding MongoDB operators: 'and', 'or' ( mixing 'and' and 'or' is not currently supported), '=', '>', '>=', '<', '<=', '!=', 'is null', 'is not null', and 'like' that is mapped to the MongoDB `$regex` operator.
+- `<query>` will expand to `{<query>}` where we will map the PanacheQL query to MongoDB native query form. We support the following operators that will be mapped to the corresponding MongoDB operators: 'and', 'or' ( mixing 'and' and 'or' is not currently supported), '=', '>', '>=', '<', '<=', '!=', 'is null', 'is not null', and 'like' that is mapped to the MongoDB `$regex` operator (both String and JavaScript patterns are supported).
 
 Here are some query examples:
 
@@ -510,6 +511,7 @@ Here are some query examples:
 - `amount > ?1 and firstname != ?2` will be mapped to `{'amount': {'$gt': ?1}, 'firstname': {'$ne': ?2}}`
 - `lastname like ?1` will be mapped to `{'lastname': {'$regex': ?1}}`. Be careful that this will be link:https://docs.mongodb.com/manual/reference/operator/query/regex/#op._S_regex[MongoDB regex] support and not SQL like pattern.
 - `lastname is not null` will be mapped to `{'lastname':{'$exists': true}}`
+- `status in ?1` will be mapped to `{'status':{$in: [?1]}}`
 
 We also handle some basic date type transformations: all fields of type `Date`, `LocalDate`, `LocalDateTime` or `Instant` will be mapped to the
 link:https://docs.mongodb.com/manual/reference/bson-types/#document-bson-type-date[BSON Date] using the `ISODate` type (UTC datetime).
@@ -656,7 +658,7 @@ WARNING: MongoDB offers ACID transactions since version 4.0. MongoDB with Panach
 
 IDs are often a touchy subject. In MongoDB, they are usually auto-generated by the database with an `ObjectId` type.
 In MongoDB with Panache the ID are defined by a field named `id` of the `org.bson.types.ObjectId` type,
-but if you want ot customize them, once again we have you covered.
+but if you want to customize them, once again we have you covered.
 
 You can specify your own ID strategy by extending `PanacheMongoEntityBase` instead of `PanacheMongoEntity`. Then
 you just declare whatever ID you want as a public field by annotating it by `@BsonId`:
@@ -691,7 +693,21 @@ you need to provide the value by yourself.
 ====
 
 `ObjectId` can be difficult to use if you want to expose its value in your REST service.
-So we created JSON-B and Jackson providers to serialize/deserialize them as a `String` which are automatically registered if your project depends on either the RESTEasy JSON-B extension or the RESTEasy Jackson extension.
+So we created Jackson and JSON-B providers to serialize/deserialize them as a `String` which are automatically registered if your project depends on either the RESTEasy Jackson extension or the RESTEasy JSON-B extension.
+
+[IMPORTANT]
+====
+If you use the standard `ObjectId` ID type, don't forget to retrieve your entity by creating a new `ObjectId` when the identifier comes from a path parameter. For example:
+
+[source,java]
+----
+@GET
+@Path("/{id}")
+public Person findById(@PathParam("id") String id) {
+    return Person.findById(new ObjectId(id));
+}
+----
+====
 
 == Working with Kotlin Data classes
 
@@ -799,21 +815,24 @@ person.name = "Loïc";
 person.birth = LocalDate.of(1910, Month.FEBRUARY, 1);
 person.status = Status.Alive;
 
-// persist it
-Uni<Void> cs1 = person.persist();
+// persist it: if you keep the default ObjectId ID field, it will be populated by the MongoDB driver,
+// and accessible when uni1 will be resolved
+Uni<Void> uni1 = person.persist();
 
 person.status = Status.Dead;
 
 // Your must call update() in order to send your entity modifications to MongoDB
-Uni<Void> cs2 = person.update();
+Uni<Void> uni2 = person.update();
 
 // delete it
-Uni<Void> cs3 = person.delete();
+Uni<Void> uni3 = person.delete();
 
 // getting a list of all persons
 Uni<List<ReactivePerson>> allPersons = ReactivePerson.listAll();
 
 // finding a specific person by ID
+// here we build a new ObjectId but you can also retrieve it from the existing entity after being persisted
+ObjectId personId = new ObjectId(idAsString);
 Uni<ReactivePerson> personById = ReactivePerson.findById(personId);
 
 // finding a specific person by ID via an Optional
@@ -915,11 +934,11 @@ public class PanacheFunctionalityTest {
         Assertions.assertEquals(0, Person.count());
 
         // Now let's specify the return value
-        Mockito.when(Person.count()).thenReturn(23l);
+        Mockito.when(Person.count()).thenReturn(23L);
         Assertions.assertEquals(23, Person.count());
 
         // Now let's change the return value
-        Mockito.when(Person.count()).thenReturn(42l);
+        Mockito.when(Person.count()).thenReturn(42L);
         Assertions.assertEquals(42, Person.count());
 
         // Now let's call the original method
@@ -931,13 +950,13 @@ public class PanacheFunctionalityTest {
 
         // Mock only with specific parameters
         Person p = new Person();
-        Mockito.when(Person.findById(12l)).thenReturn(p);
-        Assertions.assertSame(p, Person.findById(12l));
-        Assertions.assertNull(Person.findById(42l));
+        Mockito.when(Person.findById(12L)).thenReturn(p);
+        Assertions.assertSame(p, Person.findById(12L));
+        Assertions.assertNull(Person.findById(42L));
 
         // Mock throwing
-        Mockito.when(Person.findById(12l)).thenThrow(new WebApplicationException());
-        Assertions.assertThrows(WebApplicationException.class, () -> Person.findById(12l));
+        Mockito.when(Person.findById(12L)).thenThrow(new WebApplicationException());
+        Assertions.assertThrows(WebApplicationException.class, () -> Person.findById(12L));
 
         // We can even mock your custom methods
         Mockito.when(Person.findOrdered()).thenReturn(Collections.emptyList());
@@ -1006,11 +1025,11 @@ public class PanacheFunctionalityTest {
         Assertions.assertEquals(0, personRepository.count());
 
         // Now let's specify the return value
-        Mockito.when(personRepository.count()).thenReturn(23l);
+        Mockito.when(personRepository.count()).thenReturn(23L);
         Assertions.assertEquals(23, personRepository.count());
 
         // Now let's change the return value
-        Mockito.when(personRepository.count()).thenReturn(42l);
+        Mockito.when(personRepository.count()).thenReturn(42L);
         Assertions.assertEquals(42, personRepository.count());
 
         // Now let's call the original method
@@ -1022,13 +1041,13 @@ public class PanacheFunctionalityTest {
 
         // Mock only with specific parameters
         Person p = new Person();
-        Mockito.when(personRepository.findById(12l)).thenReturn(p);
-        Assertions.assertSame(p, personRepository.findById(12l));
-        Assertions.assertNull(personRepository.findById(42l));
+        Mockito.when(personRepository.findById(12L)).thenReturn(p);
+        Assertions.assertSame(p, personRepository.findById(12L));
+        Assertions.assertNull(personRepository.findById(42L));
 
         // Mock throwing
-        Mockito.when(personRepository.findById(12l)).thenThrow(new WebApplicationException());
-        Assertions.assertThrows(WebApplicationException.class, () -> personRepository.findById(12l));
+        Mockito.when(personRepository.findById(12L)).thenThrow(new WebApplicationException());
+        Assertions.assertThrows(WebApplicationException.class, () -> personRepository.findById(12L));
 
         Mockito.when(personRepository.findOrdered()).thenReturn(Collections.emptyList());
         Assertions.assertTrue(personRepository.findOrdered().isEmpty());
@@ -1077,7 +1096,9 @@ That's all there is to it: with Panache, MongoDB has never looked so trim and ne
 == Defining entities in external projects or jars
 
 MongoDB with Panache relies on compile-time bytecode enhancements to your entities.
-If you define your entities in the same project where you build your Quarkus application, everything will work fine.
-If the entities come from external projects or jars, you can make sure that your jar is treated like a Quarkus application library
-by indexing it via Jandex, see link:cdi-reference#how-to-generate-a-jandex-index[How to Generate a Jandex Index] in the CDI guide.
-This will allow Quarkus to index and enhance your entities as if they were inside the current project.
+
+It attempts to identity archives with Panache entities (and consumers of Panache entities)
+by the presence of the marker file `META-INF/panache-archive.marker`. Panache includes an
+annotation processor that will automatically create this file in archives that depend on
+Panache (even indirectly). If you have disabled annotation processors you may need to create
+this file manually in some cases.

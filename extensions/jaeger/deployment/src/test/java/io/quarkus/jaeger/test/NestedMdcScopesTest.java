@@ -2,6 +2,7 @@ package io.quarkus.jaeger.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import java.util.Map;
 
@@ -23,26 +24,33 @@ public class NestedMdcScopesTest {
 
         assertNull(mdcScopeManager.active());
         assertNull(threadLocalScopeManager.active());
+        assertNull(MDC.get("traceId"));
+        assertNull(MDC.get("parentId"));
 
-        JaegerSpanContext span = new JaegerSpanContext(1, 1, 1, 1, Byte.valueOf("0"));
+        JaegerSpanContext span = new JaegerSpanContext(1, 1, 1, 0, Byte.valueOf("0"));
         Scope scope = mdcScopeManager.activate(new TestSpan(span), true);
-        assertEquals(span, threadLocalScopeManager.active().span().context());
+        assertSame(span, threadLocalScopeManager.active().span().context());
         assertEquals("10000000000000001", MDC.get("traceId"));
+        assertEquals("0", MDC.get("parentId"));
 
         JaegerSpanContext subSpan = new JaegerSpanContext(2, 2, 2, 1, Byte.valueOf("0"));
         Scope subScope = mdcScopeManager.activate(new TestSpan(subSpan), true);
-        assertEquals(subSpan, threadLocalScopeManager.active().span().context());
+        assertSame(subSpan, threadLocalScopeManager.active().span().context());
         assertEquals("20000000000000002", MDC.get("traceId"));
+        assertEquals("1", MDC.get("parentId"));
 
         subScope.close();
 
-        assertEquals(span, threadLocalScopeManager.active().span().context());
+        assertSame(span, threadLocalScopeManager.active().span().context());
         assertEquals("10000000000000001", MDC.get("traceId"));
+        assertEquals("0", MDC.get("parentId"));
 
         scope.close();
 
         assertNull(mdcScopeManager.active());
         assertNull(threadLocalScopeManager.active());
+        assertNull(MDC.get("traceId"));
+        assertNull(MDC.get("parentId"));
     }
 
     static class TestSpan implements Span {

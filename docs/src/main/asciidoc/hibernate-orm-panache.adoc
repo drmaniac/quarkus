@@ -405,7 +405,7 @@ NOTE: The `stream` methods require a transaction to work.
 
 NOTE: The rest of the documentation show usages based on the active record pattern only,
 but keep in mind that they can be performed with the repository pattern as well.
-The repository pattern examples have been omitted for brevity. 
+The repository pattern examples have been omitted for brevity.
 
 == Advanced Query
 
@@ -435,7 +435,7 @@ List<Person> page7 = livingPersons.page(Page.of(7, 25)).list();
 int numberOfPages = livingPersons.pageCount();
 
 // get the total number of entities returned by this query without paging
-int count = livingPersons.count();
+long count = livingPersons.count();
 
 // and you can chain methods of course
 return Person.find("status", Status.Alive)
@@ -618,6 +618,15 @@ so the compiler must be configured to store parameter names inside the compiled 
 This is enabled by default if you are using the Quarkus Maven archetype. If you are not using it, add the property `<maven.compiler.parameters>true</maven.compiler.parameters>` to your pom.xml.
 ====
 
+== Multiple Persistence Units
+
+The support for multiple persistence units is described in detail in link:hibernate-orm#multiple-persistence-units[the Hibernate ORM guide].
+
+When using Panache, things are simple:
+
+* A given Panache entity can be attached to only a single persistence unit.
+* Given that, Panache already provides the necessary plumbing to transparently find the appropriate `EntityManager` associated to a Panache entity.
+
 == Transactions
 
 Make sure to wrap methods modifying your database (e.g. `entity.persist()`) within a transaction. Marking a
@@ -776,11 +785,11 @@ public class PanacheFunctionalityTest {
         Assertions.assertEquals(0, Person.count());
 
         // Now let's specify the return value
-        Mockito.when(Person.count()).thenReturn(23l);
+        Mockito.when(Person.count()).thenReturn(23L);
         Assertions.assertEquals(23, Person.count());
 
         // Now let's change the return value
-        Mockito.when(Person.count()).thenReturn(42l);
+        Mockito.when(Person.count()).thenReturn(42L);
         Assertions.assertEquals(42, Person.count());
 
         // Now let's call the original method
@@ -792,25 +801,51 @@ public class PanacheFunctionalityTest {
 
         // Mock only with specific parameters
         Person p = new Person();
-        Mockito.when(Person.findById(12l)).thenReturn(p);
-        Assertions.assertSame(p, Person.findById(12l));
-        Assertions.assertNull(Person.findById(42l));
+        Mockito.when(Person.findById(12L)).thenReturn(p);
+        Assertions.assertSame(p, Person.findById(12L));
+        Assertions.assertNull(Person.findById(42L));
 
         // Mock throwing
-        Mockito.when(Person.findById(12l)).thenThrow(new WebApplicationException());
-        Assertions.assertThrows(WebApplicationException.class, () -> Person.findById(12l));
+        Mockito.when(Person.findById(12L)).thenThrow(new WebApplicationException());
+        Assertions.assertThrows(WebApplicationException.class, () -> Person.findById(12L));
 
         // We can even mock your custom methods
         Mockito.when(Person.findOrdered()).thenReturn(Collections.emptyList());
         Assertions.assertTrue(Person.findOrdered().isEmpty());
+        
+        // Mocking a void method
+        Person.voidMethod();
+
+        // Make it throw
+        PanacheMock.doThrow(new RuntimeException("Stef2")).when(Person.class).voidMethod();
+        try {
+            Person.voidMethod();
+            Assertions.fail();
+        } catch (RuntimeException x) {
+            Assertions.assertEquals("Stef2", x.getMessage());
+        }
+
+        // Back to doNothing
+        PanacheMock.doNothing().when(Person.class).voidMethod();
+        Person.voidMethod();
+
+        // Make it call the real method
+        PanacheMock.doCallRealMethod().when(Person.class).voidMethod();
+        try {
+            Person.voidMethod();
+            Assertions.fail();
+        } catch (RuntimeException x) {
+            Assertions.assertEquals("void", x.getMessage());
+        }
 
         PanacheMock.verify(Person.class).findOrdered();
+        PanacheMock.verify(Person.class, Mockito.atLeast(4)).voidMethod();
         PanacheMock.verify(Person.class, Mockito.atLeastOnce()).findById(Mockito.any());
         PanacheMock.verifyNoMoreInteractions(Person.class);
     }
 }
 ----
-<1> Be sure to call your `verify` methods on `PanacheMock` rather than `Mockito`, otherwise you won't know
+<1> Be sure to call your `verify` and `do*` methods on `PanacheMock` rather than `Mockito`, otherwise you won't know
 what mock object to pass.
 
 === Using the repository pattern
@@ -869,11 +904,11 @@ public class PanacheFunctionalityTest {
         Assertions.assertEquals(0, personRepository.count());
 
         // Now let's specify the return value
-        Mockito.when(personRepository.count()).thenReturn(23l);
+        Mockito.when(personRepository.count()).thenReturn(23L);
         Assertions.assertEquals(23, personRepository.count());
 
         // Now let's change the return value
-        Mockito.when(personRepository.count()).thenReturn(42l);
+        Mockito.when(personRepository.count()).thenReturn(42L);
         Assertions.assertEquals(42, personRepository.count());
 
         // Now let's call the original method
@@ -885,13 +920,13 @@ public class PanacheFunctionalityTest {
 
         // Mock only with specific parameters
         Person p = new Person();
-        Mockito.when(personRepository.findById(12l)).thenReturn(p);
-        Assertions.assertSame(p, personRepository.findById(12l));
-        Assertions.assertNull(personRepository.findById(42l));
+        Mockito.when(personRepository.findById(12L)).thenReturn(p);
+        Assertions.assertSame(p, personRepository.findById(12L));
+        Assertions.assertNull(personRepository.findById(42L));
 
         // Mock throwing
-        Mockito.when(personRepository.findById(12l)).thenThrow(new WebApplicationException());
-        Assertions.assertThrows(WebApplicationException.class, () -> personRepository.findById(12l));
+        Mockito.when(personRepository.findById(12L)).thenThrow(new WebApplicationException());
+        Assertions.assertThrows(WebApplicationException.class, () -> personRepository.findById(12L));
 
         Mockito.when(personRepository.findOrdered()).thenReturn(Collections.emptyList());
         Assertions.assertTrue(personRepository.findOrdered().isEmpty());
@@ -944,7 +979,35 @@ That's all there is to it: with Panache, Hibernate ORM has never looked so trim 
 == Defining entities in external projects or jars
 
 Hibernate ORM with Panache relies on compile-time bytecode enhancements to your entities.
-If you define your entities in the same project where you build your Quarkus application, everything will work fine.
-If the entities come from external projects or jars, you can make sure that your jar is treated like a Quarkus application library
-by indexing it via Jandex, see link:cdi-reference#how-to-generate-a-jandex-index[How to Generate a Jandex Index] in the CDI guide.
-This will allow Quarkus to index and enhance your entities as if they were inside the current project.
+
+It attempts to identity archives with Panache entities (and consumers of Panache entities)
+by the presence of the marker file `META-INF/panache-archive.marker`. Panache includes an
+annotation processor that will automatically create this file in archives that depend on
+Panache (even indirectly). If you have disabled annotation processors you may need to create
+this file manually in some cases.
+
+WARNING: If you include the jpa-modelgen annotation processor this will exclude the Panache
+annotation processor by default. If you do this you should either create the marker file
+yourself, or add the `quarkus-panache-common` as well, as shown below:
+
+[source,xml]
+----
+<plugin>
+    <artifactId>maven-compiler-plugin</artifactId>
+    <version>${compiler-plugin.version}</version>
+    <configuration>
+      <annotationProcessorPaths>
+        <annotationProcessorPath>
+          <groupId>org.hibernate</groupId>
+          <artifactId>hibernate-jpamodelgen</artifactId>
+          <version>${hibernate.version}</version>
+        </annotationProcessorPath>
+        <annotationProcessorPath>
+          <groupId>io.quarkus</groupId>
+          <artifactId>quarkus-panache-common</artifactId>
+          <version>${quarkus.platform.version}</version>
+        </annotationProcessorPath>
+      </annotationProcessorPaths>
+    </configuration>
+</plugin>
+----

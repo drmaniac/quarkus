@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 
 import javax.enterprise.inject.spi.DeploymentException;
 
@@ -32,6 +33,7 @@ import io.quarkus.cache.runtime.CacheInvalidateInterceptor;
 import io.quarkus.cache.runtime.CacheResultInterceptor;
 import io.quarkus.cache.runtime.caffeine.CaffeineCacheBuildRecorder;
 import io.quarkus.cache.runtime.caffeine.CaffeineCacheInfo;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
@@ -41,15 +43,15 @@ class CacheProcessor {
 
     @BuildStep
     FeatureBuildItem feature() {
-        return new FeatureBuildItem(FeatureBuildItem.CACHE);
+        return new FeatureBuildItem(Feature.CACHE);
     }
 
-    @BuildStep
+    @BuildStep(onlyIf = CacheEnabled.class)
     AnnotationsTransformerBuildItem annotationsTransformer() {
         return new AnnotationsTransformerBuildItem(new CacheAnnotationsTransformer());
     }
 
-    @BuildStep
+    @BuildStep(onlyIf = CacheEnabled.class)
     List<AdditionalBeanBuildItem> additionalBeans() {
         return Arrays.asList(
                 new AdditionalBeanBuildItem(CacheInvalidateAllInterceptor.class),
@@ -57,7 +59,7 @@ class CacheProcessor {
                 new AdditionalBeanBuildItem(CacheResultInterceptor.class));
     }
 
-    @BuildStep
+    @BuildStep(onlyIf = CacheEnabled.class)
     ValidationErrorBuildItem validateBeanDeployment(ValidationPhaseBuildItem validationPhase) {
         AnnotationStore annotationStore = validationPhase.getContext().get(Key.ANNOTATION_STORE);
         List<Throwable> throwables = new ArrayList<>();
@@ -73,11 +75,15 @@ class CacheProcessor {
         return new ValidationErrorBuildItem(throwables.toArray(new Throwable[0]));
     }
 
-    @BuildStep
+    @BuildStep(onlyIf = CacheEnabled.class)
     @Record(STATIC_INIT)
     void recordCachesBuild(CombinedIndexBuildItem combinedIndex, BeanContainerBuildItem beanContainer, CacheConfig config,
-            CaffeineCacheBuildRecorder caffeineRecorder) {
+            CaffeineCacheBuildRecorder caffeineRecorder,
+            List<AdditionalCacheNameBuildItem> additionalCacheNames) {
         Set<String> cacheNames = getCacheNames(combinedIndex.getIndex());
+        for (AdditionalCacheNameBuildItem additionalCacheName : additionalCacheNames) {
+            cacheNames.add(additionalCacheName.getName());
+        }
         switch (config.type) {
             case CacheDeploymentConstants.CAFFEINE_CACHE_TYPE:
                 Set<CaffeineCacheInfo> cacheInfos = CaffeineCacheInfoBuilder.build(cacheNames, config);
@@ -107,5 +113,14 @@ class CacheProcessor {
             }
         }
         return cacheNames;
+    }
+
+    private static class CacheEnabled implements BooleanSupplier {
+
+        CacheConfig config;
+
+        public boolean getAsBoolean() {
+            return config.enabled;
+        }
     }
 }

@@ -87,4 +87,32 @@ public class IncludeTest {
                         .render());
     }
 
+    @Test
+    public void testIncludeStandaloneLines() {
+        Engine engine = Engine.builder().addDefaults().removeStandaloneLines(true).build();
+        engine.putTemplate("super", engine.parse("{#insert header}\n"
+                + "default header\n"
+                + "{/insert}"));
+        assertEquals("super header\n",
+                engine.parse("{#include super}\n"
+                        + "{#header}\n"
+                        + "super header\n"
+                        + "{/header}\n"
+                        + "{/include}").render());
+    }
+
+    @Test
+    public void testEmptyInclude() {
+        Engine engine = Engine.builder().addDefaults().build();
+        engine.putTemplate("bar/fool.html", engine.parse("{foo} and {that}"));
+        assertEquals("1 and true", engine.parse("{#include bar/fool.html that=true /}").data("foo", 1).render());
+    }
+
+    @Test
+    public void testInsertParam() {
+        Engine engine = Engine.builder().addDefaults().build();
+        engine.putTemplate("super", engine.parse("{#insert header}default header{/insert} and {#insert footer}{that}{/}"));
+        assertEquals("1 and 1", engine.parse("{#include 'super' that=foo}{#header}{that}{/}{/}").data("foo", 1).render());
+    }
+
 }

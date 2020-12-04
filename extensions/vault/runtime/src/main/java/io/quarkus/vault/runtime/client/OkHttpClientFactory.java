@@ -8,6 +8,7 @@ import static io.quarkus.vault.runtime.config.VaultRuntimeConfig.KUBERNETES_CACE
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.security.cert.X509Certificate;
+import java.util.Collections;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
@@ -16,22 +17,32 @@ import javax.net.ssl.X509TrustManager;
 
 import org.jboss.logging.Logger;
 
+import io.quarkus.runtime.TlsConfig;
+import io.quarkus.runtime.util.JavaVersionUtil;
 import io.quarkus.vault.VaultException;
 import io.quarkus.vault.runtime.config.VaultRuntimeConfig;
 import okhttp3.OkHttpClient;
+import okhttp3.Protocol;
 
 public class OkHttpClientFactory {
 
     private static final Logger log = Logger.getLogger(OkHttpClientFactory.class.getName());
 
-    public static OkHttpClient createHttpClient(VaultRuntimeConfig serverConfig) {
+    public static OkHttpClient createHttpClient(VaultRuntimeConfig serverConfig, TlsConfig tlsConfig) {
 
         OkHttpClient.Builder builder = new OkHttpClient.Builder()
                 .connectTimeout(serverConfig.connectTimeout)
                 .readTimeout(serverConfig.readTimeout);
+        if (!JavaVersionUtil.isJava11OrHigher()) {
+            // for Java versions lesser than Java 11, we explicitly use HTTP/1.1
+            // to prevent HTTP/2 being included by default since there are known issues
+            // with HTTP/2 protocol and ALPN negotiation over HTTPS in older Java versions.
+            builder.protocols(Collections.singletonList(Protocol.HTTP_1_1));
+        }
 
         try {
-            if (serverConfig.tls.skipVerify) {
+            boolean trustAll = serverConfig.tls.skipVerify.isPresent() ? serverConfig.tls.skipVerify.get() : tlsConfig.trustAll;
+            if (trustAll) {
                 skipVerify(builder);
             } else if (serverConfig.tls.caCert.isPresent()) {
                 cacert(builder, serverConfig.tls.caCert.get());

@@ -26,14 +26,54 @@ public class JibConfig {
     /**
      * Additional JVM arguments to pass to the JVM when starting the application
      */
-    @ConfigItem(defaultValue = "-Dquarkus.http.host=0.0.0.0,-Djava.util.logging.manager=org.jboss.logmanager.LogManager")
+    @ConfigItem(defaultValue = "-Djava.util.logging.manager=org.jboss.logmanager.LogManager")
     public List<String> jvmArguments;
 
     /**
      * Additional arguments to pass when starting the native application
      */
-    @ConfigItem(defaultValue = "-Dquarkus.http.host=0.0.0.0")
-    public List<String> nativeArguments;
+    @ConfigItem
+    public Optional<List<String>> nativeArguments;
+
+    /**
+     * If this is set, then it will be used as the entry point of the container image.
+     * There are a few things to be aware of when creating an entry point
+     * <ul>
+     * <li>A valid entrypoint is jar package specific (see {@code quarkus.package.type})</li>
+     * <li>A valid entrypoint depends on the location of both the launching scripts and the application jar file. To that
+     * end it's helpful to remember that when {@code fast-jar} packaging is used, all necessary application jars are added to
+     * the {@code /work} directory and that the same
+     * directory is also used as the working directory. When {@code legacy} or {@code uber-jar} are used, the application jars
+     * are unpacked under the {@code /app} directory
+     * and that directory is used as the working directory.</li>
+     * <li>Even if the {@code jvmArguments} field is set, it is ignored completely</li>
+     * </ul>
+     *
+     * When this is not set, a proper default entrypoint will be constructed.
+     *
+     * As a final note, a very useful tool for inspecting container image layers that can greatly aid
+     * when debugging problems with endpoints is <a href="https://github.com/wagoodman/dive">dive</a>
+     */
+    @ConfigItem
+    public Optional<List<String>> jvmEntrypoint;
+
+    /**
+     * If this is set, then it will be used as the entry point of the container image.
+     * There are a few things to be aware of when creating an entry point
+     * <ul>
+     * <li>A valid entrypoint depends on the location of both the launching scripts and the native binary file. To that end
+     * it's helpful to remember that the native application is added to the {@code /work} directory and that and the same
+     * directory is also used as the working directory</li>
+     * <li>Even if the {@code nativeArguments} field is set, it is ignored completely</li>
+     * </ul>
+     *
+     * When this is not set, a proper default entrypoint will be constructed.
+     *
+     * As a final note, a very useful tool for inspecting container image layers that can greatly aid
+     * when debugging problems with endpoints is <a href="https://github.com/wagoodman/dive">dive</a>
+     */
+    @ConfigItem
+    public Optional<List<String>> nativeEntrypoint;
 
     /**
      * Environment variables to add to the container image
@@ -58,4 +98,16 @@ public class JibConfig {
      */
     @ConfigItem
     public Optional<String> baseRegistryPassword;
+
+    /**
+     * The ports to expose
+     */
+    @ConfigItem(defaultValue = "8080")
+    public List<Integer> ports;
+
+    /**
+     * The user to use in generated image
+     */
+    @ConfigItem
+    public Optional<String> user;
 }

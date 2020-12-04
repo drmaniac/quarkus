@@ -1,0 +1,15 @@
+name: commandmode-example
+ref: commandmode
+type: code
+tags: example
+language:
+  base:
+    data:
+      main:
+        class-name: HelloCommando
+      package-name: org.acme
+      greeting:
+        message: "Hello"
+        default-name: "Commando"
+    dependencies:
+      - io.quarkus:quarkus-arc

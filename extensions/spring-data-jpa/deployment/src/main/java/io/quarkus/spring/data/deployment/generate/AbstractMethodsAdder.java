@@ -1,6 +1,8 @@
 package io.quarkus.spring.data.deployment.generate;
 
+import java.util.Collection;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
@@ -10,14 +12,18 @@ import java.util.stream.Stream;
 
 import javax.persistence.NoResultException;
 
+import org.jboss.jandex.AnnotationInstance;
+import org.jboss.jandex.AnnotationValue;
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.SliceImpl;
+import org.springframework.data.jpa.repository.Modifying;
 
 import io.quarkus.gizmo.BytecodeCreator;
 import io.quarkus.gizmo.CatchBlockCreator;
+import io.quarkus.gizmo.FieldDescriptor;
 import io.quarkus.gizmo.FunctionCreator;
 import io.quarkus.gizmo.MethodCreator;
 import io.quarkus.gizmo.MethodDescriptor;
@@ -26,6 +32,7 @@ import io.quarkus.gizmo.TryBlock;
 import io.quarkus.hibernate.orm.panache.PanacheQuery;
 import io.quarkus.panache.common.Page;
 import io.quarkus.spring.data.deployment.DotNames;
+import io.quarkus.spring.data.runtime.RepositorySupport;
 import io.quarkus.spring.data.runtime.TypesConverter;
 
 public abstract class AbstractMethodsAdder {
@@ -119,7 +126,7 @@ public abstract class AbstractMethodsAdder {
                     MethodDescriptor.ofMethod(Optional.class, "empty", Optional.class));
             catchBlock.returnValue(emptyOptional);
         } else if (DotNames.LIST.equals(returnType) || DotNames.COLLECTION.equals(returnType)
-                || DotNames.ITERATOR.equals(returnType)) {
+                || DotNames.SET.equals(returnType) || DotNames.ITERATOR.equals(returnType)) {
             ResultHandle list;
 
             if (customResultType == null) {
@@ -158,6 +165,10 @@ public abstract class AbstractMethodsAdder {
                         MethodDescriptor.ofMethod(Iterable.class, "iterator", Iterator.class),
                         list);
                 methodCreator.returnValue(iterator);
+            } else if (DotNames.SET.equals(returnType)) {
+                ResultHandle set = methodCreator.newInstance(
+                        MethodDescriptor.ofConstructor(LinkedHashSet.class, Collection.class), list);
+                methodCreator.returnValue(set);
             }
             methodCreator.returnValue(list);
 
@@ -203,10 +214,51 @@ public abstract class AbstractMethodsAdder {
 
             methodCreator.returnValue(sliceResult);
 
+        } else if (isIntLongOrBoolean(returnType)) {
+            ResultHandle singleResult = methodCreator.invokeInterfaceMethod(
+                    MethodDescriptor.ofMethod(PanacheQuery.class, "singleResult", Object.class),
+                    panacheQuery);
+            methodCreator.returnValue(singleResult);
         } else {
             throw new IllegalArgumentException(
                     "Return type of method " + methodName + " of Repository " + repositoryClassInfo
                             + " does not match find query type");
         }
+    }
+
+    /**
+     * Flush the underlying persistence context before executing the modifying query if enabled by {@link Modifying}
+     * annotation.
+     */
+    protected void handleFlushAutomatically(AnnotationInstance modifyingAnnotation, MethodCreator methodCreator,
+            FieldDescriptor entityClassFieldDescriptor) {
+        final AnnotationValue flushAutomatically = modifyingAnnotation != null ? modifyingAnnotation.value("flushAutomatically")
+                : null;
+        if (flushAutomatically != null && flushAutomatically.asBoolean()) {
+            methodCreator.invokeStaticMethod(
+                    MethodDescriptor.ofMethod(RepositorySupport.class, "flush", void.class, Class.class),
+                    methodCreator.readInstanceField(entityClassFieldDescriptor, methodCreator.getThis()));
+        }
+    }
+
+    /**
+     * Clear the underlying persistence context after executing the modifying query if enabled by {@link Modifying}
+     * annotation.
+     */
+    protected void handleClearAutomatically(AnnotationInstance modifyingAnnotation, MethodCreator methodCreator,
+            FieldDescriptor entityClassFieldDescriptor) {
+        final AnnotationValue clearAutomatically = modifyingAnnotation != null ? modifyingAnnotation.value("clearAutomatically")
+                : null;
+        if (clearAutomatically != null && clearAutomatically.asBoolean()) {
+            methodCreator.invokeStaticMethod(
+                    MethodDescriptor.ofMethod(RepositorySupport.class, "clear", void.class, Class.class),
+                    methodCreator.readInstanceField(entityClassFieldDescriptor, methodCreator.getThis()));
+        }
+    }
+
+    protected boolean isIntLongOrBoolean(DotName dotName) {
+        return DotNames.BOOLEAN.equals(dotName) || DotNames.PRIMITIVE_BOOLEAN.equals(dotName)
+                || DotNames.INTEGER.equals(dotName) || DotNames.PRIMITIVE_INTEGER.equals(dotName)
+                || DotNames.LONG.equals(dotName) || DotNames.PRIMITIVE_LONG.equals(dotName);
     }
 }

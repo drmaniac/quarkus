@@ -1,6 +1,5 @@
 package io.quarkus.spring.data.deployment;
 
-import static java.util.stream.Collectors.*;
 import static java.util.stream.Collectors.toList;
 
 import java.lang.reflect.Modifier;
@@ -14,11 +13,11 @@ import java.util.regex.Pattern;
 
 import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.ConfigProvider;
+import org.jboss.jandex.AnnotationInstance;
+import org.jboss.jandex.AnnotationTarget;
 import org.jboss.jandex.ClassInfo;
-import org.jboss.jandex.CompositeIndex;
 import org.jboss.jandex.DotName;
 import org.jboss.jandex.IndexView;
-import org.jboss.jandex.Indexer;
 import org.jboss.logging.Logger;
 import org.springframework.data.domain.Auditable;
 import org.springframework.data.domain.Persistable;
@@ -31,16 +30,18 @@ import org.springframework.data.repository.query.QueryByExampleExecutor;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.GeneratedBeanBuildItem;
 import io.quarkus.arc.deployment.GeneratedBeanGizmoAdaptor;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.GeneratedClassGizmoAdaptor;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
+import io.quarkus.deployment.builditem.AdditionalIndexedClassesBuildItem;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
-import io.quarkus.deployment.index.IndexingUtil;
 import io.quarkus.gizmo.ClassOutput;
 import io.quarkus.hibernate.orm.deployment.IgnorableNonIndexedClasses;
+import io.quarkus.hibernate.orm.panache.deployment.JavaJpaTypeBundle;
 import io.quarkus.spring.data.deployment.generate.SpringDataRepositoryCreator;
 
 public class SpringDataJPAProcessor {
@@ -64,7 +65,18 @@ public class SpringDataJPAProcessor {
 
     @BuildStep
     FeatureBuildItem registerFeature() {
-        return new FeatureBuildItem(FeatureBuildItem.SPRING_DATA_JPA);
+        return new FeatureBuildItem(Feature.SPRING_DATA_JPA);
+    }
+
+    @BuildStep
+    void contributeClassesToIndex(BuildProducer<AdditionalIndexedClassesBuildItem> additionalIndexedClasses) {
+        // index the Spring Data repository interfaces that extend Repository because we need to pull the generic types from it
+        additionalIndexedClasses.produce(new AdditionalIndexedClassesBuildItem(
+                Repository.class.getName(),
+                CrudRepository.class.getName(),
+                PagingAndSortingRepository.class.getName(),
+                JpaRepository.class.getName(),
+                QueryByExampleExecutor.class.getName()));
     }
 
     @BuildStep
@@ -83,13 +95,52 @@ public class SpringDataJPAProcessor {
 
         detectAndLogSpecificSpringPropertiesIfExist();
 
-        IndexView indexIndex = index.getIndex();
-        List<ClassInfo> interfacesExtendingCrudRepository = getAllInterfacesExtending(DotNames.SUPPORTED_REPOSITORIES,
-                indexIndex);
+        IndexView indexView = index.getIndex();
+        List<ClassInfo> interfacesExtendingRepository = getAllInterfacesExtending(DotNames.SUPPORTED_REPOSITORIES,
+                indexView);
 
-        removeNoRepositoryBeanClasses(interfacesExtendingCrudRepository);
+        addRepositoryDefinitionInstances(indexView, interfacesExtendingRepository);
+
+        addInterfacesExtendingIntermediateRepositories(indexView, interfacesExtendingRepository);
+
+        removeNoRepositoryBeanClasses(interfacesExtendingRepository);
         implementCrudRepositories(generatedBeans, generatedClasses, additionalBeans, reflectiveClasses,
-                interfacesExtendingCrudRepository, indexIndex);
+                interfacesExtendingRepository, indexView);
+    }
+
+    private void addInterfacesExtendingIntermediateRepositories(IndexView indexView,
+            List<ClassInfo> interfacesExtendingRepository) {
+        Collection<DotName> noRepositoryBeanRepos = getAllNoRepositoryBeanInterfaces(indexView);
+        Iterator<DotName> iterator = noRepositoryBeanRepos.iterator();
+        while (iterator.hasNext()) {
+            DotName interfaceName = iterator.next();
+            if (DotNames.SUPPORTED_REPOSITORIES.contains(interfaceName)) {
+                iterator.remove();
+            }
+        }
+        List<ClassInfo> interfacesExtending = getAllInterfacesExtending(noRepositoryBeanRepos, indexView);
+        interfacesExtendingRepository.addAll(interfacesExtending);
+    }
+
+    // classes annotated with @RepositoryDefinition behave exactly as if they extended Repository
+    private void addRepositoryDefinitionInstances(IndexView indexView, List<ClassInfo> interfacesExtendingRepository) {
+        Collection<AnnotationInstance> repositoryDefinitions = indexView
+                .getAnnotations(DotNames.SPRING_DATA_REPOSITORY_DEFINITION);
+        for (AnnotationInstance repositoryDefinition : repositoryDefinitions) {
+            AnnotationTarget target = repositoryDefinition.target();
+            if (target.kind() != AnnotationTarget.Kind.CLASS) {
+                continue;
+            }
+            ClassInfo classInfo = target.asClass();
+            Set<DotName> supportedRepositories = DotNames.SUPPORTED_REPOSITORIES;
+            for (DotName supportedRepository : supportedRepositories) {
+                if (classInfo.interfaceNames().contains(supportedRepository)) {
+                    throw new IllegalArgumentException("Class " + classInfo.name()
+                            + " which is annotated with @RepositoryDefinition cannot also extend " + supportedRepository);
+                }
+            }
+            interfacesExtendingRepository.add(classInfo);
+        }
     }
 
     private void detectAndLogSpecificSpringPropertiesIfExist() {
@@ -147,8 +198,8 @@ public class SpringDataJPAProcessor {
         }
     }
 
-    private void removeNoRepositoryBeanClasses(List<ClassInfo> interfacesExtendingCrudRepository) {
-        Iterator<ClassInfo> iterator = interfacesExtendingCrudRepository.iterator();
+    private void removeNoRepositoryBeanClasses(List<ClassInfo> interfacesExtendingRepository) {
+        Iterator<ClassInfo> iterator = interfacesExtendingRepository.iterator();
         while (iterator.hasNext()) {
             ClassInfo next = iterator.next();
             if (next.classAnnotation(DotNames.SPRING_DATA_NO_REPOSITORY_BEAN) != null) {
@@ -180,6 +231,23 @@ public class SpringDataJPAProcessor {
         return result;
     }
 
+    private Collection<DotName> getAllNoRepositoryBeanInterfaces(IndexView index) {
+        Set<DotName> result = new HashSet<>();
+        Collection<ClassInfo> knownClasses = index.getKnownClasses();
+        for (ClassInfo clazz : knownClasses) {
+            if (!Modifier.isInterface(clazz.flags())) {
+                continue;
+            }
+            boolean found = false;
+            for (ClassInfo classInfo : knownClasses) {
+                if (classInfo.classAnnotation(DotNames.SPRING_DATA_NO_REPOSITORY_BEAN) != null) {
+                    result.add(classInfo.name());
+                }
+            }
+        }
+        return result;
+    }
+
     // generate a concrete class that will be used by Arc to resolve injection points
     private void implementCrudRepositories(BuildProducer<GeneratedBeanBuildItem> generatedBeans,
             BuildProducer<GeneratedClassBuildItem> generatedClasses,
@@ -190,18 +258,8 @@ public class SpringDataJPAProcessor {
         ClassOutput beansClassOutput = new GeneratedBeanGizmoAdaptor(generatedBeans);
         ClassOutput otherClassOutput = new GeneratedClassGizmoAdaptor(generatedClasses, true);
 
-        // index the Spring Data repository interfaces that extend Repository because we need to pull the generic types from it
-        Indexer indexer = new Indexer();
-        Set<DotName> additionalIndex = new HashSet<>();
-        indexRepositoryInterface(index, indexer, additionalIndex, Repository.class);
-        indexRepositoryInterface(index, indexer, additionalIndex, CrudRepository.class);
-        indexRepositoryInterface(index, indexer, additionalIndex, PagingAndSortingRepository.class);
-        indexRepositoryInterface(index, indexer, additionalIndex, JpaRepository.class);
-        indexRepositoryInterface(index, indexer, additionalIndex, QueryByExampleExecutor.class);
-        CompositeIndex compositeIndex = CompositeIndex.create(index, indexer.complete());
-
         SpringDataRepositoryCreator repositoryCreator = new SpringDataRepositoryCreator(beansClassOutput, otherClassOutput,
-                compositeIndex, (n) -> {
+                index, (n) -> {
                     // the implementation of fragments don't need to be beans themselves
                     additionalBeans.produce(AdditionalBeanBuildItem.unremovableOf(n));
                 },
@@ -209,16 +267,10 @@ public class SpringDataJPAProcessor {
                     // the generated classes that implement interfaces for holding custom query results need
                     // to be registered for reflection here since this is the only point where the generated class is known
                     reflectiveClasses.produce(new ReflectiveClassBuildItem(true, false, className));
-                }));
+                }), JavaJpaTypeBundle.BUNDLE);
 
         for (ClassInfo crudRepositoryToImplement : crudRepositoriesToImplement) {
-            repositoryCreator.implementCrudRepository(crudRepositoryToImplement);
+            repositoryCreator.implementCrudRepository(crudRepositoryToImplement, index);
         }
-    }
-
-    private void indexRepositoryInterface(IndexView index, Indexer indexer, Set<DotName> additionalIndex,
-            Class<?> repoClass) {
-        IndexingUtil.indexClass(repoClass.getName(), indexer, index, additionalIndex,
-                SpringDataJPAProcessor.class.getClassLoader());
     }
 }

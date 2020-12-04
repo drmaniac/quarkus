@@ -18,6 +18,7 @@ import java.util.logging.ErrorManager;
 import java.util.logging.Formatter;
 import java.util.logging.Handler;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
 
 import org.graalvm.nativeimage.ImageInfo;
 import org.jboss.logmanager.EmbeddedConfigurator;
@@ -34,6 +35,7 @@ import org.jboss.logmanager.handlers.PeriodicSizeRotatingFileHandler;
 import org.jboss.logmanager.handlers.SizeRotatingFileHandler;
 import org.jboss.logmanager.handlers.SyslogHandler;
 
+import io.quarkus.bootstrap.logging.InitialConfigurator;
 import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.annotations.Recorder;
 import io.quarkus.runtime.configuration.ConfigInstantiator;
@@ -44,7 +46,7 @@ import io.quarkus.runtime.configuration.ConfigInstantiator;
 @Recorder
 public class LoggingSetupRecorder {
 
-    private static final boolean IS_WINDOWS = System.getProperty("os.name").toLowerCase(Locale.ENGLISH).contains("win");
+    private static final boolean IS_WINDOWS = System.getProperty("os.name").toLowerCase(Locale.ENGLISH).contains("windows");
 
     /**
      * <a href="https://conemu.github.io">ConEmu</a> ANSI X3.64 support enabled,
@@ -73,11 +75,12 @@ public class LoggingSetupRecorder {
     public static void handleFailedStart() {
         LogConfig config = new LogConfig();
         ConfigInstantiator.handleObject(config);
-        new LoggingSetupRecorder().initializeLogging(config, Collections.emptyList(),
+        new LoggingSetupRecorder().initializeLogging(config, Collections.emptyList(), Collections.emptyList(),
                 Collections.emptyList(), null);
     }
 
     public void initializeLogging(LogConfig config, final List<RuntimeValue<Optional<Handler>>> additionalHandlers,
+            final List<RuntimeValue<Map<String, Handler>>> additionalNamedHandlers,
             final List<RuntimeValue<Optional<Formatter>>> possibleFormatters,
             final RuntimeValue<Optional<Supplier<String>>> possibleBannerSupplier) {
 
@@ -91,7 +94,8 @@ public class LoggingSetupRecorder {
         final Map<String, CleanupFilterConfig> filters = config.filters;
         List<LogCleanupFilterElement> filterElements = new ArrayList<>(filters.size());
         for (Entry<String, CleanupFilterConfig> entry : filters.entrySet()) {
-            filterElements.add(new LogCleanupFilterElement(entry.getKey(), entry.getValue().ifStartsWith));
+            filterElements.add(
+                    new LogCleanupFilterElement(entry.getKey(), entry.getValue().targetLevel, entry.getValue().ifStartsWith));
         }
 
         final ArrayList<Handler> handlers = new ArrayList<>(3 + additionalHandlers.size());
@@ -115,6 +119,16 @@ public class LoggingSetupRecorder {
         }
 
         Map<String, Handler> namedHandlers = createNamedHandlers(config, possibleFormatters, errorManager, filterElements);
+
+        Map<String, Handler> additionalNamedHandlersMap = additionalNamedHandlers.stream().map(RuntimeValue::getValue)
+                .flatMap(map -> map.entrySet().stream())
+                .collect(Collectors.toMap(Entry::getKey, Entry::getValue));
+
+        for (Handler additionalNamedHandler : additionalNamedHandlersMap.values()) {
+            additionalNamedHandler.setErrorManager(errorManager);
+            additionalNamedHandler.setFilter(new LogCleanupFilter(filterElements));
+        }
+        namedHandlers.putAll(additionalNamedHandlersMap);
 
         for (Map.Entry<String, CategoryConfig> entry : categories.entrySet()) {
             final String name = entry.getKey();
@@ -271,10 +285,12 @@ public class LoggingSetupRecorder {
             final List<LogCleanupFilterElement> filterElements) {
         FileHandler handler = new FileHandler();
         FileConfig.RotationConfig rotationConfig = config.rotation;
-        if (rotationConfig.maxFileSize.isPresent() && rotationConfig.fileSuffix.isPresent()) {
+        if ((rotationConfig.maxFileSize.isPresent() || rotationConfig.rotateOnBoot)
+                && rotationConfig.fileSuffix.isPresent()) {
             PeriodicSizeRotatingFileHandler periodicSizeRotatingFileHandler = new PeriodicSizeRotatingFileHandler();
             periodicSizeRotatingFileHandler.setSuffix(rotationConfig.fileSuffix.get());
-            periodicSizeRotatingFileHandler.setRotateSize(rotationConfig.maxFileSize.get().asLongValue());
+            rotationConfig.maxFileSize
+                    .ifPresent(memorySize -> periodicSizeRotatingFileHandler.setRotateSize(memorySize.asLongValue()));
             periodicSizeRotatingFileHandler.setRotateOnBoot(rotationConfig.rotateOnBoot);
             periodicSizeRotatingFileHandler.setMaxBackupIndex(rotationConfig.maxBackupIndex);
             handler = periodicSizeRotatingFileHandler;

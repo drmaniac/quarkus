@@ -16,27 +16,28 @@
 
     <properties>
         <!-- Maven plugin versions -->
-        <elasticsearch-maven-plugin.version>6.15</elasticsearch-maven-plugin.version>
-        <elasticsearch-server.version>7.6.1</elasticsearch-server.version>
         <scala-maven-plugin.version>4.1.1</scala-maven-plugin.version>
 
         <!-- These properties are needed in order for them to be resolvable by the generated projects -->
-        <!-- Quarkus uses jboss-parent and it comes with 3.8.0-jboss-2, we don't want that in the templates -->
+        <!-- Quarkus uses jboss-parent and it comes with 3.8.1-jboss-1, we don't want that in the templates -->
         <compiler-plugin.version>3.8.1</compiler-plugin.version>
-        <kotlin.version>1.3.72</kotlin.version>
+        <kotlin.version>1.4.20</kotlin.version>
         <scala.version>2.12.8</scala.version>
         <scala-plugin.version>4.1.1</scala-plugin.version>
 
-        <version.surefire.plugin>2.22.1</version.surefire.plugin>
+        <version.enforcer.plugin>3.0.0-M3</version.enforcer.plugin>
+        <version.surefire.plugin>3.0.0-M5</version.surefire.plugin>
+        <failsafe-plugin.version>${version.surefire.plugin}</failsafe-plugin.version>
 
         <!-- These properties are needed in order for them to be resolvable by the documentation -->
         <!-- The Graal version we suggest using in documentation - as that's
            what we work with by self downloading it: -->
-        <graal-sdk.version-for-documentation>19.3.1</graal-sdk.version-for-documentation>
-        <rest-assured.version>4.1.1</rest-assured.version>
-        <axle-client.version>0.0.15</axle-client.version>
-        <mutiny-client.version>0.0.15</mutiny-client.version>
-        <vertx.version>3.9.0</vertx.version>
+        <graal-sdk.version-for-documentation>20.2.0</graal-sdk.version-for-documentation>
+        <mandrel.version-for-documentation>20.1</mandrel.version-for-documentation>
+        <rest-assured.version>4.3.2</rest-assured.version>
+        <axle-client.version>1.1.0</axle-client.version>
+        <mutiny-client.version>1.1.0</mutiny-client.version>
+        <vertx.version>3.9.2</vertx.version>
 
         <!-- Dev tools -->
         <freemarker.version>2.3.30</freemarker.version>
@@ -55,22 +56,28 @@
         <!-- These 2 properties are used by CreateProjectMojo to add the Maven Wrapper -->
         <proposed-maven-version>3.6.3</proposed-maven-version>
         <maven-wrapper.version>0.7.7</maven-wrapper.version>
-        <gradle-wrapper.version>6.3</gradle-wrapper.version>
+        <gradle-wrapper.version>6.6.1</gradle-wrapper.version>
 
         <!-- MicroProfile TCK versions -->
         <microprofile-health-api.version>2.2</microprofile-health-api.version>
         <microprofile-config-api.version>1.4</microprofile-config-api.version>
-        <microprofile-metrics-api.version>2.3</microprofile-metrics-api.version>
-        <microprofile-fault-tolerance-api.version>2.1</microprofile-fault-tolerance-api.version>
+        <microprofile-metrics-api.version>2.3.2</microprofile-metrics-api.version>
+        <microprofile-fault-tolerance-api.version>2.1.1</microprofile-fault-tolerance-api.version>
         <microprofile-reactive-messaging-api.version>1.0</microprofile-reactive-messaging-api.version>
         <microprofile-rest-client-api.version>1.4.1</microprofile-rest-client-api.version>
         <microprofile-open-api.version>1.1.2</microprofile-open-api.version>
         <microprofile-opentracing-api.version>1.3.3</microprofile-opentracing-api.version>
         <microprofile-context-propagation.version>1.0.1</microprofile-context-propagation.version>
         <microprofile-jwt-api.version>1.1.1</microprofile-jwt-api.version>
+        <microprofile-graphql-api.version>1.0.3</microprofile-graphql-api.version>
 
         <!-- Antlr is used by the PanacheQL parser-->
         <antlr.version>4.7.2</antlr.version>
+
+        <!-- Defaults for integration tests -->
+        <elasticsearch-server.version>7.10.0</elasticsearch-server.version>
+        <elasticsearch.image>docker.elastic.co/elasticsearch/elasticsearch-oss:${elasticsearch-server.version}</elasticsearch.image>
+        <elasticsearch.protocol>http</elasticsearch.protocol>
 
         <!-- Align various dependencies that are not really part of the bom-->
         <findbugs.version>3.0.2</findbugs.version>
@@ -78,14 +85,47 @@
         <wagon-provider-api.version>3.3.3</wagon-provider-api.version>
 
         <!-- The image to use for tests that run Keycloak -->
-        <!-- IMPORTANT: If this is changed you must also update .github/workflows/ci-actions.yml to match the version -->
-        <keycloak.docker.image>quay.io/keycloak/keycloak:9.0.2</keycloak.docker.image>
+        <!-- IMPORTANT: If this is changed you must also update bom/application/pom.xml to match the version -->
+        <keycloak.docker.image>quay.io/keycloak/keycloak:11.0.3</keycloak.docker.image>
 
         <unboundid-ldap.version>4.0.13</unboundid-ldap.version>
+
+        <wiremock-jre8.version>2.26.3</wiremock-jre8.version>
+        <wiremock-maven-plugin.version>6.0.0</wiremock-maven-plugin.version>
 
         <!-- Code Coverage Properties-->
         <jacoco.agent.argLine></jacoco.agent.argLine>
         <jacoco.version>0.8.5</jacoco.version>
+
+        <maven-dependency-plugin.version>3.1.2</maven-dependency-plugin.version>
+
+        <!--TODO: remove when switched back to quarkus-maven-plugin for grpc stubs-->
+        <protoc.version>3.12.3</protoc.version> <!--keep in sync with the BOM-->
+        <grpc.version>1.30.2</grpc.version> <!--keep in sync with the BOM -->
+
+        <boring-ssl.version>2.0.30.Final</boring-ssl.version>
+
+        <!-- Used for integration tests, to make sure webjars work-->
+        <bootstrap.version>3.1.0</bootstrap.version>
+
+        <!-- revapi API check -->
+        <revapi-maven-plugin.version>0.12.1</revapi-maven-plugin.version>
+        <revapi-java-plugin.version>0.22.0</revapi-java-plugin.version>
+        <build-helper-plugin.version>1.9.1</build-helper-plugin.version>
+        <revapi-reporter-text.version>0.12.1</revapi-reporter-text.version>
+        <revapi-reporter-json.version>0.2.1</revapi-reporter-json.version>
+         <!-- Latest release to be used by api-compatibility-check to check backwards compatibility of the Quarkus API. -->
+        <revapi.oldVersion>1.6.0.Final</revapi.oldVersion>
+        <revapi.newVersion>${project.version}</revapi.newVersion>
+        <!-- severity Possible values: equivalent, nonBreaking, potentiallyBreaking, breaking -->
+        <revapi.reportSeverity>nonBreaking</revapi.reportSeverity>
+        <!-- Skip the API checks by default. Let the modules opt in. -->
+        <revapi.skip>true</revapi.skip>
+        <!-- By default don't check dependencies -->
+        <revapi.checkdeps>false</revapi.checkdeps>
+
+        <!-- platform properties -->
+        <platform.quarkus.native.builder-image>quay.io/quarkus/ubi-quarkus-native-image:20.2.0-java11</platform.quarkus.native.builder-image>
     </properties>
 
     <dependencyManagement>
@@ -94,7 +134,7 @@
             <!-- Quarkus Extensions Dependencies are coming from quarkus-bom-deployment (that also imports quarkus-bom) -->
             <dependency>
                 <groupId>io.quarkus</groupId>
-                <artifactId>quarkus-bom-deployment</artifactId>
+                <artifactId>quarkus-bom</artifactId>
                 <version>${project.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
@@ -102,6 +142,11 @@
 
             <!-- Dev tools -->
 
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-devmode-test-utils</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>io.quarkus</groupId>
                 <artifactId>quarkus-devtools-utilities</artifactId>
@@ -164,6 +209,73 @@
                 <artifactId>unboundid-ldapsdk</artifactId>
                 <version>${unboundid-ldap.version}</version>
             </dependency>
+            <dependency>
+                <groupId>com.github.tomakehurst</groupId>
+                <artifactId>wiremock-jre8</artifactId>
+                <version>${wiremock-jre8.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>javax.servlet</groupId>
+                        <artifactId>javax.servlet-api</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>javax.xml.bind</groupId>
+                        <artifactId>jaxb-api</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.checkerframework</groupId>
+                        <artifactId>checker-qual</artifactId>
+                    </exclusion>
+                    <exclusion> <!-- fix dependencyConvergence clash with junit-jupiter -->
+                        <groupId>org.opentest4j</groupId>
+                        <artifactId>opentest4j</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>com.google.code.findbugs</groupId>
+                        <artifactId>jsr305</artifactId>
+                   </exclusion>
+                </exclusions>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-tcnative-boringssl-static</artifactId>
+                <scope>test</scope>
+                <version>${boring-ssl.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.webjars</groupId>
+                <artifactId>bootstrap</artifactId>
+                <version>${bootstrap.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-bootstrap-core</artifactId>
+                <version>${project.version}</version>
+                <type>test-jar</type>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-integration-test-class-transformer</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-integration-test-shared-library</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-test-maven</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-security-test-utils</artifactId>
+                <version>${project.version}</version>
+                <scope>test</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -172,12 +284,29 @@
             <plugins>
                 <plugin>
                     <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${version.surefire.plugin}</version>
                     <configuration>
-                        <systemProperties>
+                        <systemPropertyVariables>
                             <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
-                        </systemProperties>
-                        <argLine>${jacoco.agent.argLine}</argLine>
+                            <maven.home>${maven.home}</maven.home>
+                        </systemPropertyVariables>
+                        <argLine>${jacoco.agent.argLine} -Xmx1500m</argLine> <!-- limit the amount of memory surefire can use, 1500m should be plenty-->
                     </configuration>
+                </plugin>
+                <plugin>
+                    <artifactId>maven-failsafe-plugin</artifactId>
+                    <version>${failsafe-plugin.version}</version>
+                    <configuration>
+                        <systemPropertyVariables>
+                            <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                            <maven.home>${maven.home}</maven.home>
+                        </systemPropertyVariables>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-dependency-plugin</artifactId>
+                    <version>${maven-dependency-plugin.version}</version>
                 </plugin>
                 <plugin>
                     <groupId>io.quarkus</groupId>
@@ -265,9 +394,10 @@
                                             <exclude>jakarta.json:jakarta.json-api</exclude>
                                             <!-- Ensure none of the deps use netty-all. This forces deps to use more fine grained netty artifacts -->
                                             <exclude>io.netty:netty-all</exclude>
+                                            <!-- Ban jboss-logmanager, we use jboss-logmanager-embedded -->
+                                            <exclude>org.jboss.logmanager:jboss-logmanager</exclude>
                                             <!-- Ban Log4J (use org.jboss.logmanager:log4j-jboss-logmanager instead) -->
                                             <exclude>log4j:log4j</exclude>
-                                            <exclude>org.apache.logging.log4j:log4j-api</exclude>
                                             <exclude>org.apache.logging.log4j:log4j-core</exclude>
                                             <exclude>org.apache.logging.log4j:log4j-slf4j-impl</exclude>
                                             <!-- Ban commons-logging (use org.jboss.logging:commons-logging-jboss-logging instead) -->
@@ -275,7 +405,8 @@
                                             <exclude>commons-logging:commons-logging-api</exclude>
                                             <exclude>org.springframework:spring-jcl</exclude>
                                             <exclude>org.slf4j:jcl-over-slf4j</exclude>
-                                            <!-- Ban SLF4j implementations (use org.jboss.slf4j:slf4j-jboss-logging instead) -->
+                                            <!-- Ban SLF4j implementations (use org.jboss.slf4j:slf4j-jboss-logmanager instead) -->
+                                            <exclude>org.jboss.slf4j:slf4j-jboss-logging</exclude>
                                             <exclude>org.slf4j:slf4j-simple</exclude>
                                             <exclude>org.slf4j:slf4j-nop</exclude>
                                             <exclude>org.slf4j:slf4j-jdk14</exclude>
@@ -294,9 +425,10 @@
                                             <exclude>org.springframework.boot:spring-boot</exclude>
                                             <!-- Ban checker-qual, we don't use Checker Framework -->
                                             <exclude>org.checkerframework:checker-qual</exclude>
-                                            <exclude>com.google.code.findbugs:jsr305</exclude>
                                             <!-- We use our own impl here, including this one causes problems-->
                                             <exclude>org.jboss.resteasy:resteasy-context-propagation</exclude>
+                                            <exclude>com.google.android:annotations</exclude>
+                                            <exclude>org.codehaus.mojo:animal-sniffer-annotations</exclude>
                                         </excludes>
                                         <includes>
                                             <!-- this is for REST Assured -->
@@ -327,12 +459,12 @@
                 <plugin>
                     <groupId>org.jboss.jandex</groupId>
                     <artifactId>jandex-maven-plugin</artifactId>
-                    <version>1.0.7</version>
+                    <version>1.0.8</version>
                 </plugin>
                 <plugin>
                     <groupId>net.revelc.code.formatter</groupId>
                     <artifactId>formatter-maven-plugin</artifactId>
-                    <version>2.11.0</version>
+                    <version>2.13.0</version>
                     <dependencies>
                         <dependency>
                             <artifactId>quarkus-ide-config</artifactId>
@@ -342,13 +474,14 @@
                       </dependencies>
                     <configuration>
                         <configFile>eclipse-format.xml</configFile>
+                        <lineEnding>LF</lineEnding>
                         <skip>${format.skip}</skip>
                     </configuration>
                 </plugin>
                 <plugin>
                     <groupId>net.revelc.code</groupId>
                     <artifactId>impsort-maven-plugin</artifactId>
-                    <version>1.3.2</version>
+                    <version>1.4.1</version>
                     <configuration>
                         <groups>java.,javax.,org.,com.</groups>
                         <staticGroups>*</staticGroups>
@@ -366,11 +499,9 @@
                     <version>3.1.0</version>
                 </plugin>
                 <plugin>
-                    <groupId>com.github.alexcojocaru</groupId>
-                    <artifactId>elasticsearch-maven-plugin</artifactId>
-                    <version>${elasticsearch-maven-plugin.version}</version>
+                    <artifactId>maven-compiler-plugin</artifactId>
                     <configuration>
-                        <version>${elasticsearch-server.version}</version>
+                        <parameters>true</parameters>
                     </configuration>
                 </plugin>
                 <plugin>
@@ -381,7 +512,26 @@
                 <plugin>
                     <groupId>uk.co.automatictester</groupId>
                     <artifactId>wiremock-maven-plugin</artifactId>
-                    <version>5.0.1</version>
+                    <version>${wiremock-maven-plugin.version}</version>
+                    <dependencies>
+                        <!-- plugin defines "wiremock" artifactId (in provided scope), not the preferred "wiremock-jre8"
+                             which cannot be forced here, see https://issues.apache.org/jira/browse/MNG-6222 -->
+                        <dependency>
+                            <groupId>com.github.tomakehurst</groupId>
+                            <artifactId>wiremock</artifactId>
+                            <version>${wiremock-jre8.version}</version>
+                        </dependency>
+                    </dependencies>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>build-helper-maven-plugin</artifactId>
+                    <version>${build-helper-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.revapi</groupId>
+                    <artifactId>revapi-maven-plugin</artifactId>
+                    <version>${revapi-maven-plugin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>
@@ -400,6 +550,7 @@
                         <artifactId>maven-compiler-plugin</artifactId>
                         <configuration>
                             <release>8</release>
+                            <parameters>true</parameters>
                         </configuration>
                     </plugin>
                 </plugins>
@@ -705,5 +856,117 @@
                 </plugins>
             </build>
         </profile>
+
+        <profile>
+            <id>api-check</id>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>parse-version</id>
+                                <goals>
+                                    <goal>parse-version</goal>
+                                </goals>
+                                <phase>validate</phase>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.revapi</groupId>
+                        <artifactId>revapi-maven-plugin</artifactId>
+                        <dependencies>
+                            <dependency>
+                                <groupId>io.quarkus</groupId>
+                                <artifactId>quarkus-revapi-config</artifactId>
+                                <version>${project.version}</version>
+                            </dependency>
+                            <dependency>
+                                <groupId>org.revapi</groupId>
+                                <artifactId>revapi-java</artifactId>
+                                <version>${revapi-java-plugin.version}</version>
+                            </dependency>
+                            <dependency>
+                                <groupId>org.revapi</groupId>
+                                <artifactId>revapi-reporter-json</artifactId>
+                                <version>${revapi-reporter-json.version}</version>
+                            </dependency>
+                            <dependency>
+                                <groupId>org.revapi</groupId>
+                                <artifactId>revapi-reporter-text</artifactId>
+                                <version>${revapi-reporter-text.version}</version>
+                            </dependency>
+                        </dependencies>
+                        <configuration>
+                            <oldArtifacts>
+                                <artifact>${project.groupId}:${project.artifactId}:${revapi.oldVersion}</artifact>
+                            </oldArtifacts>
+                            <newArtifacts>
+                                <artifact>${project.groupId}:${project.artifactId}:${revapi.newVersion}</artifact>
+                            </newArtifacts>
+                            <!-- don't fail is false making it possible to have 
+                                revapi checks without requiring config files -->
+                            <failOnMissingConfigurationFiles>false</failOnMissingConfigurationFiles>
+                            <!-- Consider changes from the latest .Final version, 
+                                not from the latest non-snapshot. -->
+                            <versionFormat>\d+\.\d+\.\d+\.Final</versionFormat>
+                            <!-- By default revapi will check the oldArtifact 
+                                against the currently executed build -->
+                            <!-- <checkDependencies>false</checkDependencies> -->
+                            <analysisConfigurationFiles>
+                                <configurationFile>
+                                    <resource>revapi/revapi-configuration.xml</resource>
+                                </configurationFile>
+                                <configurationFile>
+                                    <path>api-changes.xml</path>
+                                    <roots>
+                                        <root>versions/v${parsedVersion.majorVersion}.${parsedVersion.minorVersion}.${parsedVersion.incrementalVersion}</root>
+                                    </roots>
+                                </configurationFile>
+                            </analysisConfigurationFiles>
+                            <!-- By default, revapi will only fail the build 
+                                 if there are potentially breaking or breaking changes. However, in the report 
+                                 we want even non breaking changes to be present. -->
+                            <reportSeverity>nonBreaking</reportSeverity>
+                            <failSeverity>potentiallyBreaking</failSeverity>
+                            <failBuildOnProblemsFound>true</failBuildOnProblemsFound>
+                            <checkDependencies>${revapi.checkdeps}</checkDependencies>
+                            <ignoreSuggestionsFormat>xml</ignoreSuggestionsFormat>
+                            <ignoreSuggestionsFile>${project.build.directory}/api-changes-suggestions.xml</ignoreSuggestionsFile>
+                            <expandProperties>true</expandProperties>
+                        </configuration>
+                        <!-- Running two executions is a workaround to make sure 
+                             we get a HTML report in case revapi finds some incompatible changes. The 
+                             "check" goal will simply fail the whole build before it could get to the 
+                             report. To make sure we always get a HTML report, the "report" goal needs 
+                             to be executed before the "check" goal. Once https://github.com/revapi/revapi/issues/11 
+                             is fixed it should be possible to use single execution. -->
+                        <executions>
+                            <execution>
+                                <id>api-check</id>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                                <phase>verify</phase>
+                            </execution>
+                            <execution>
+                                <!-- report can be found in ${build.directory}/site/revapi-report.html -->
+                                <id>api-report</id>
+                                <goals>
+                                    <goal>report</goal>
+                                </goals>
+                                <phase>package</phase>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
     </profiles>
 </project>

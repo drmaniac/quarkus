@@ -1,5 +1,6 @@
 package io.quarkus.netty.runtime.graal;
 
+import java.nio.ByteBuffer;
 import java.security.PrivateKey;
 import java.security.Provider;
 import java.security.cert.X509Certificate;
@@ -35,6 +36,7 @@ import io.netty.handler.ssl.SslProvider;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import io.netty.util.internal.logging.JdkLoggerFactory;
+import io.quarkus.netty.runtime.EmptyByteBufStub;
 
 /**
  * This substitution avoid having loggers added to the build
@@ -97,7 +99,7 @@ final class Target_io_netty_handler_ssl_JdkAlpnApplicationProtocolNegotiator_Alp
     @Substitute
     public SSLEngine wrapSslEngine(SSLEngine engine, ByteBufAllocator alloc,
             JdkApplicationProtocolNegotiator applicationNegotiator, boolean isServer) {
-        return (SSLEngine) (Object) new Target_io_netty_handler_ssl_Java9SslEngine(engine, applicationNegotiator, isServer);
+        return (SSLEngine) (Object) new Target_io_netty_handler_ssl_JdkAlpnSslEngine(engine, applicationNegotiator, isServer);
     }
 
 }
@@ -139,10 +141,10 @@ final class Target_io_netty_handler_ssl_JettyAlpnSslEngine {
     }
 }
 
-@TargetClass(className = "io.netty.handler.ssl.Java9SslEngine", onlyWith = JDK11OrLater.class)
-final class Target_io_netty_handler_ssl_Java9SslEngine {
+@TargetClass(className = "io.netty.handler.ssl.JdkAlpnSslEngine", onlyWith = JDK11OrLater.class)
+final class Target_io_netty_handler_ssl_JdkAlpnSslEngine {
     @Alias
-    Target_io_netty_handler_ssl_Java9SslEngine(final SSLEngine engine,
+    Target_io_netty_handler_ssl_JdkAlpnSslEngine(final SSLEngine engine,
             final JdkApplicationProtocolNegotiator applicationNegotiator, final boolean isServer) {
 
     }
@@ -385,6 +387,48 @@ final class Target_io_netty_util_internal_NativeLibraryLoader {
     static Class<?> tryToLoadClass(final ClassLoader loader, final Class<?> helper)
             throws ClassNotFoundException {
         return Class.forName(helper.getName(), false, loader);
+    }
+
+}
+
+@TargetClass(className = "io.netty.buffer.EmptyByteBuf")
+final class Target_io_netty_buffer_EmptyByteBuf {
+
+    @Alias
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)
+    private static ByteBuffer EMPTY_BYTE_BUFFER;
+
+    @Alias
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)
+    private static long EMPTY_BYTE_BUFFER_ADDRESS;
+
+    @Substitute
+    public ByteBuffer nioBuffer() {
+        return EmptyByteBufStub.emptyByteBuffer();
+    }
+
+    @Substitute
+    public ByteBuffer[] nioBuffers() {
+        return new ByteBuffer[] { EmptyByteBufStub.emptyByteBuffer() };
+    }
+
+    @Substitute
+    public ByteBuffer internalNioBuffer(int index, int length) {
+        return EmptyByteBufStub.emptyByteBuffer();
+    }
+
+    @Substitute
+    public boolean hasMemoryAddress() {
+        return EmptyByteBufStub.emptyByteBufferAddress() != 0;
+    }
+
+    @Substitute
+    public long memoryAddress() {
+        if (hasMemoryAddress()) {
+            return EmptyByteBufStub.emptyByteBufferAddress();
+        } else {
+            throw new UnsupportedOperationException();
+        }
     }
 
 }

@@ -1,0 +1,12 @@
+{#include Dockerfile-layout type='jvm'}
+    {#quarkusbuild}{buildtool.cli} {buildtool.cmd.package}{/quarkusbuild}
+    {#image}{dockerfile.jvm.from} {/image}
+    {#args}
+ARG JAVA_PACKAGE={dockerfile.jvm.java-package}
+ARG RUN_JAVA_VERSION={dockerfile.jvm.run-java-version}
+    {/args}
+    {#copy}
+COPY {buildtool.build-dir}/lib/* /deployments/lib/
+COPY {buildtool.build-dir}/*-runner.jar /deployments/app.jar
+    {/copy}
+{/include}

@@ -11,14 +11,16 @@ class ResolutionContextImpl implements ResolutionContext {
     private final List<NamespaceResolver> namespaceResolvers;
     private final Evaluator evaluator;
     private final Map<String, SectionBlock> extendingBlocks;
+    private final TemplateInstance templateInstance;
 
     ResolutionContextImpl(ResolutionContextImpl parent, Object data, List<NamespaceResolver> namespaceResolvers,
-            Evaluator evaluator, Map<String, SectionBlock> extendingBlocks) {
+            Evaluator evaluator, Map<String, SectionBlock> extendingBlocks, TemplateInstance templateInstance) {
         this.parent = parent;
         this.data = data;
         this.namespaceResolvers = namespaceResolvers;
         this.evaluator = evaluator;
         this.extendingBlocks = extendingBlocks;
+        this.templateInstance = templateInstance;
     }
 
     @Override
@@ -32,13 +34,9 @@ class ResolutionContextImpl implements ResolutionContext {
     }
 
     @Override
-    public ResolutionContext createChild(Object data, List<NamespaceResolver> namespaceResolvers) {
-        return new ResolutionContextImpl(this, data, namespaceResolvers, evaluator, null);
-    }
-
-    @Override
-    public ResolutionContext createChild(Map<String, SectionBlock> extendingBlocks) {
-        return new ResolutionContextImpl(this, data, namespaceResolvers, evaluator, extendingBlocks);
+    public ResolutionContext createChild(Object data, List<NamespaceResolver> namespaceResolvers,
+            Map<String, SectionBlock> extendingBlocks) {
+        return new ResolutionContextImpl(this, data, namespaceResolvers, evaluator, extendingBlocks, templateInstance);
     }
 
     @Override
@@ -68,6 +66,11 @@ class ResolutionContextImpl implements ResolutionContext {
             }
         }
         return null;
+    }
+
+    @Override
+    public Object getAttribute(String key) {
+        return templateInstance.getAttribute(key);
     }
 
 }

@@ -1,16 +1,19 @@
 package io.quarkus.vertx.core.runtime;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
-
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import io.quarkus.vertx.core.runtime.VertxCoreRecorder.VertxOptionsCustomizer;
+import io.quarkus.vertx.core.runtime.config.AddressResolverConfiguration;
 import io.quarkus.vertx.core.runtime.config.ClusterConfiguration;
 import io.quarkus.vertx.core.runtime.config.EventBusConfiguration;
 import io.quarkus.vertx.core.runtime.config.JksConfiguration;
@@ -18,6 +21,9 @@ import io.quarkus.vertx.core.runtime.config.PemKeyCertConfiguration;
 import io.quarkus.vertx.core.runtime.config.PemTrustCertConfiguration;
 import io.quarkus.vertx.core.runtime.config.PfxConfiguration;
 import io.quarkus.vertx.core.runtime.config.VertxConfiguration;
+import io.vertx.core.Vertx;
+import io.vertx.core.VertxOptions;
+import io.vertx.core.dns.AddressResolverOptions;
 
 public class VertxCoreProducerTest {
 
@@ -49,11 +55,48 @@ public class VertxCoreProducerTest {
         configuration.cluster = cc;
 
         try {
-            VertxCoreRecorder.initialize(configuration);
-            fail("It should not have a cluster manager on the classpath, and so fail the creation");
+            VertxCoreRecorder.initialize(configuration, null);
+            Assertions.fail("It should not have a cluster manager on the classpath, and so fail the creation");
         } catch (IllegalStateException e) {
-            assertTrue(e.getMessage().contains("No ClusterManagerFactory"));
+            Assertions.assertTrue(e.getMessage().contains("No ClusterManagerFactory"),
+                    "The message should contain ''. Message: " + e.getMessage());
         }
+    }
+
+    @Test
+    public void shouldConfigureAddressResolver() {
+        VertxConfiguration configuration = createDefaultConfiguration();
+        AddressResolverConfiguration ar = configuration.resolver;
+        ar.cacheMaxTimeToLive = 3;
+        ar.cacheNegativeTimeToLive = 1;
+
+        VertxOptionsCustomizer customizers = new VertxOptionsCustomizer(Arrays.asList(
+                new Consumer<VertxOptions>() {
+                    @Override
+                    public void accept(VertxOptions vertxOptions) {
+                        Assertions.assertEquals(3, vertxOptions.getAddressResolverOptions().getCacheMaxTimeToLive());
+                        Assertions.assertEquals(
+                                AddressResolverOptions.DEFAULT_CACHE_MIN_TIME_TO_LIVE,
+                                vertxOptions.getAddressResolverOptions().getCacheMinTimeToLive());
+                        Assertions.assertEquals(1, vertxOptions.getAddressResolverOptions().getCacheNegativeTimeToLive());
+                    }
+                }));
+
+        VertxCoreRecorder.initialize(configuration, customizers);
+    }
+
+    @Test
+    public void shouldInvokeCustomizers() {
+        final AtomicBoolean called = new AtomicBoolean(false);
+        VertxOptionsCustomizer customizers = new VertxOptionsCustomizer(Arrays.asList(
+                new Consumer<VertxOptions>() {
+                    @Override
+                    public void accept(VertxOptions vertxOptions) {
+                        called.set(true);
+                    }
+                }));
+        Vertx v = VertxCoreRecorder.initialize(createDefaultConfiguration(), customizers);
+        Assertions.assertTrue(called.get(), "Customizer should get called during initialization");
     }
 
     private VertxConfiguration createDefaultConfiguration() {
@@ -61,10 +104,10 @@ public class VertxCoreProducerTest {
         vc.caching = true;
         vc.classpathResolving = true;
         vc.eventLoopsPoolSize = OptionalInt.empty();
-        vc.maxEventLoopExecuteTime = Optional.of(Duration.ofSeconds(2));
+        vc.maxEventLoopExecuteTime = Duration.ofSeconds(2);
         vc.warningExceptionTime = Duration.ofSeconds(2);
         vc.workerPoolSize = 20;
-        vc.maxWorkerExecuteTime = Optional.of(Duration.ofSeconds(1));
+        vc.maxWorkerExecuteTime = Duration.ofSeconds(1);
         vc.internalBlockingPoolSize = 20;
         vc.useAsyncDNS = false;
         vc.preferNativeTransport = false;
@@ -110,6 +153,10 @@ public class VertxCoreProducerTest {
         vc.cluster.clustered = false;
         vc.cluster.pingInterval = Duration.ofSeconds(20);
         vc.cluster.pingReplyInterval = Duration.ofSeconds(20);
+        vc.resolver = new AddressResolverConfiguration();
+        vc.resolver.cacheMaxTimeToLive = Integer.MAX_VALUE;
+        vc.resolver.cacheMinTimeToLive = 0;
+        vc.resolver.cacheNegativeTimeToLive = 0;
         return vc;
     }
 }

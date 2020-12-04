@@ -8,6 +8,12 @@ import io.quarkus.runtime.annotations.ConfigRoot;
 public class QuartzRuntimeConfig {
 
     /**
+     * The name of the Quartz instance.
+     */
+    @ConfigItem(defaultValue = "QuarkusQuartzScheduler")
+    public String instanceName;
+
+    /**
      * The size of scheduler thread pool. This will initialize the number of worker threads in the pool.
      */
     @ConfigItem(defaultValue = "25")
@@ -24,7 +30,7 @@ public class QuartzRuntimeConfig {
      * If set to true the scheduler will be started even if no scheduled business methods are found. This is necessary for
      * "pure" programmatic scheduling.
      */
-    @ConfigItem(defaultValue = "false")
+    @ConfigItem
     public boolean forceStart;
 
 }

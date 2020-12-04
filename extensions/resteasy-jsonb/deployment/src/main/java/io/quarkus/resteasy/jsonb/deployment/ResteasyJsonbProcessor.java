@@ -1,21 +1,44 @@
 package io.quarkus.resteasy.jsonb.deployment;
 
-import io.quarkus.deployment.Capabilities;
+import java.util.Arrays;
+import java.util.List;
+
+import io.quarkus.deployment.Capability;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.builditem.CapabilityBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
+import io.quarkus.jsonb.spi.JsonbDeserializerBuildItem;
+import io.quarkus.jsonb.spi.JsonbSerializerBuildItem;
+import io.quarkus.resteasy.jsonb.vertx.VertxJson;
 
 public class ResteasyJsonbProcessor {
 
+    private static final List<String> VERTX_SERIALIZERS = Arrays.asList(
+            VertxJson.JsonObjectSerializer.class.getName(),
+            VertxJson.JsonArraySerializer.class.getName());
+
+    private static final List<String> VERTX_DESERIALIZERS = Arrays.asList(
+            VertxJson.JsonObjectDeserializer.class.getName(),
+            VertxJson.JsonArrayDeserializer.class.getName());
+
     @BuildStep
     void feature(BuildProducer<FeatureBuildItem> feature) {
-        feature.produce(new FeatureBuildItem(FeatureBuildItem.RESTEASY_JSONB));
+        feature.produce(new FeatureBuildItem(Feature.RESTEASY_JSONB));
     }
 
     @BuildStep
     void capabilities(BuildProducer<CapabilityBuildItem> capability) {
-        capability.produce(new CapabilityBuildItem(Capabilities.RESTEASY_JSON_EXTENSION));
-        capability.produce(new CapabilityBuildItem(Capabilities.REST_JSONB));
+        capability.produce(new CapabilityBuildItem(Capability.RESTEASY_JSON));
+        capability.produce(new CapabilityBuildItem(Capability.REST_JSONB));
+    }
+
+    @BuildStep
+    public void registerVertxJsonSupport(
+            BuildProducer<JsonbSerializerBuildItem> serializers,
+            BuildProducer<JsonbDeserializerBuildItem> deserializers) {
+        serializers.produce(new JsonbSerializerBuildItem(VERTX_SERIALIZERS));
+        deserializers.produce(new JsonbDeserializerBuildItem(VERTX_DESERIALIZERS));
     }
 }

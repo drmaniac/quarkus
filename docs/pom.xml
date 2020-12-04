@@ -15,13 +15,12 @@
 
     <packaging>jar</packaging>
     <properties>
-        <asciidoctorj.version>2.2.0</asciidoctorj.version>
-        <asciidoctor-maven-plugin.version>2.0.0-RC.1</asciidoctor-maven-plugin.version>
+        <asciidoctorj.version>2.3.0</asciidoctorj.version>
+        <asciidoctor-maven-plugin.version>2.0.0</asciidoctor-maven-plugin.version>
         <asciidoctorj-pdf.version>1.5.0-beta.8</asciidoctorj-pdf.version>
         <quarkus-home-url>https://quarkus.io</quarkus-home-url>
         <quarkus-base-url>https://github.com/quarkusio/quarkus</quarkus-base-url>
         <quickstarts-base-url>https://github.com/quarkusio/quarkus-quickstarts</quickstarts-base-url>
-        <skipDocs>false</skipDocs>
     </properties>
 
     <name>Quarkus - Documentation</name>
@@ -57,6 +56,28 @@
     <build>
         <plugins>
             <plugin>
+                <groupId>dev.jbang</groupId>
+                <artifactId>jbang-maven-plugin</artifactId>
+                <version>0.0.5</version>
+                <executions>
+                    <execution>
+                        <id>generate-build-item-doc</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <jbangVersion>0.47.1</jbangVersion>
+                            <script>${project.basedir}/../.github/quarkusbuilditemdoc.java</script>
+                            <args>
+                                <arg>--outputFile ${project.basedir}/../target/asciidoc/generated/config/quarkus-all-build-items.adoc</arg>
+                                <arg>--dirs ${project.basedir}/../core/deployment ${project.basedir}/../core/test-extension ${project.basedir}/../extensions</arg>
+                            </args>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <executions>
@@ -72,7 +93,7 @@
                     <mainClass>io.quarkus.docs.generation.AllConfigGenerator</mainClass>
                     <arguments>
                         <argument>${project.version}</argument>
-                        <argument>${project.basedir}/../devtools/bom-descriptor-json/target/extensions.json</argument>
+                        <argument>${project.basedir}/../devtools/platform-descriptor-json/target/classes/quarkus-bom-descriptor/extensions.json</argument>
                     </arguments>
                     <environmentVariables>
                         <MAVEN_CMD_LINE_ARGS>${env.MAVEN_CMD_LINE_ARGS}</MAVEN_CMD_LINE_ARGS>
@@ -109,10 +130,17 @@
                         <surefire-version>${version.surefire.plugin}</surefire-version>
                         <graalvm-version>${graal-sdk.version-for-documentation}</graalvm-version>
                         <graalvm-flavor>${graal-sdk.version-for-documentation}-java11</graalvm-flavor>
+                        <mandrel-version>${mandrel.version-for-documentation}</mandrel-version>
+                        <mandrel-flavor>${mandrel.version-for-documentation}-java11</mandrel-flavor>
                         <restassured-version>${rest-assured.version}</restassured-version>
                         <maven-version>${proposed-maven-version}</maven-version>
                         <gradle-version>${gradle-wrapper.version}</gradle-version>
                         <keycloak-docker-image>${keycloak.docker.image}</keycloak-docker-image>
+
+                        <grpc-version>${grpc.version}</grpc-version>
+                        <protoc-version>${protoc.version}</protoc-version>
+                        <elasticsearch-version>${elasticsearch-server.version}</elasticsearch-version>
+
                         <!-- Project website home page -->
                         <quarkus-home-url>${quarkus-home-url}</quarkus-home-url>
                         <!-- Root URL of the GitHub organization -->

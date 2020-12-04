@@ -1,0 +1,12 @@
+name: amazon-lambda-example
+ref: amazon-lambda
+type: code
+tags:
+  - example
+  - singleton-example
+language:
+  base:
+    dependencies:
+      - io.quarkus:quarkus-amazon-lambda
+    test-dependencies:
+      - io.quarkus:quarkus-test-amazon-lambda

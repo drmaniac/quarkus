@@ -62,7 +62,7 @@ However, you can go right to the completed example.
 
 Download an {quickstarts-archive-url}[archive] or clone the git repository:
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 git clone {quickstarts-clone-url}
 ----
@@ -75,7 +75,7 @@ The easiest way to create a new Quarkus project is to open a terminal and run th
 
 For Linux & MacOS users
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectGroupId=org.acme \
@@ -87,16 +87,16 @@ cd getting-started
 
 For Windows users
 
-- If using cmd , (don't use forward slash `\`)
+- If using cmd , (don't use backward slash `\`)
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create -DprojectGroupId=org.acme -DprojectArtifactId=getting-started -DclassName="org.acme.getting.started.GreetingResource" -Dpath="/hello"
 ----
 
 - If using Powershell , wrap `-D` parameters in double quotes
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create "-DprojectGroupId=org.acme" "-DprojectArtifactId=getting-started" "-DclassName=org.acme.getting.started.GreetingResource" "-Dpath=/hello"
 ----
@@ -219,10 +219,11 @@ Listening for transport dt_socket at address: 5005
 
 Once started, you can request the provided endpoint:
 
-```
+[source,shell]
+----
 $ curl -w "\n" http://localhost:8080/hello
 hello
-```
+----
 
 Hit `CTRL+C` to stop the application, or keep it running and enjoy the blazing fast hot-reload.
 
@@ -235,7 +236,9 @@ We are using `curl -w "\n"` in this example to avoid your terminal printing a '%
 == Using injection
 
 Dependency injection in Quarkus is based on ArC which is a CDI-based dependency injection solution tailored for Quarkus' architecture.
-You can learn more about it in the link:cdi-reference[Contexts and Dependency Injection guide].
+If you're new to CDI then we recommend you to read the link:cdi[Introduction to CDI] guide.
+
+Quarkus only implements a subset of the CDI features and comes with non-standard features and specific APIS, you can learn more about it in the link:cdi-reference[Contexts and Dependency Injection guide].
 
 ArC comes as a dependency of `quarkus-resteasy` so you already have it handy.
 
@@ -346,14 +349,16 @@ be set, as the default version does not support Junit 5:
     <artifactId>maven-surefire-plugin</artifactId>
     <version>${surefire-plugin.version}</version>
     <configuration>
-       <systemProperties>
+       <systemPropertyVariables>
           <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
-       </systemProperties>
+          <maven.home>${maven.home}</maven.home>
+       </systemPropertyVariables>
     </configuration>
 </plugin>
 ----
 
-We also set the `java.util.logging` system property to make sure tests will use the correct logmanager.
+We also set the `java.util.logging` system property to make sure tests will use the correct logmanager and `maven.home` to ensure that custom configuration
+from `${maven.home}/conf/settings.xml` is applied (if any).
 
 The generated project contains a simple test.
 Edit the `src/test/java/org/acme/getting/started/GreetingResourceTest.java` to match the following content:
@@ -402,7 +407,7 @@ These tests use http://rest-assured.io/[RestAssured], but feel free to use your 
 
 You can run these using Maven:
 
-[source,shell,subs=attributes+]
+[source,bash,subs=attributes+]
 ----
 ./mvnw test
 ----
@@ -425,6 +430,21 @@ URL testUrl;
 The test port can be controlled via the `quarkus.http.test-port` config property. Quarkus also creates a system
 property called `test.url` that is set to the base test URL for situations where you cannot use injection.
 
+== Working with multi-module project or external modules
+
+Quarkus heavily utilizes https://github.com/wildfly/jandex[Jandex] at build time, to discover various classes or annotations. One immediately recongizable application of this, is CDI bean discovery.
+As a result, most of the Quarkus extensions will not work properly if this build time discovery isn't properly setup.
+
+This index is created by default on the project on which Quarkus is configured for, thanks to our Maven and Gradle plugins.
+
+However, when working with a multi-module project, be sure to read the `Working with multi-module projects` section of the
+link:maven-tooling#multi-module-maven[Maven] or link:gradle-tooling#multi-module-maven[Gradle] guides.
+
+If you plan to use external modules (for example, an external library for all your domain objects),
+you will need to make these modules known to the indexing process either by adding the Jandex plugin (if you can modify them)
+or via the `quarkus.index-dependency` property inside your `application.properties` (useful in cases where you can't modify the module).
+
+Be sure to read the link:cdi-reference#bean_discovery[Bean Discovery] section of the CDI guide for more information.
 
 == Packaging and run the application
 

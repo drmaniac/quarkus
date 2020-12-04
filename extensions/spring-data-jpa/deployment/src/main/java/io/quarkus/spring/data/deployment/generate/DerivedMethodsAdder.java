@@ -1,10 +1,14 @@
 package io.quarkus.spring.data.deployment.generate;
 
+import static io.quarkus.gizmo.FieldDescriptor.of;
+
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 
 import javax.transaction.Transactional;
 
+import org.jboss.jandex.AnnotationInstance;
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
 import org.jboss.jandex.IndexView;
@@ -18,8 +22,10 @@ import io.quarkus.gizmo.FieldDescriptor;
 import io.quarkus.gizmo.MethodCreator;
 import io.quarkus.gizmo.MethodDescriptor;
 import io.quarkus.gizmo.ResultHandle;
-import io.quarkus.hibernate.orm.panache.PanacheQuery;
-import io.quarkus.hibernate.orm.panache.runtime.JpaOperations;
+import io.quarkus.hibernate.orm.panache.common.runtime.AbstractJpaOperations;
+import io.quarkus.hibernate.orm.panache.runtime.AdditionalJpaOperations;
+import io.quarkus.panache.common.deployment.TypeBundle;
+import io.quarkus.panache.hibernate.common.runtime.PanacheJpaUtil;
 import io.quarkus.spring.data.deployment.DotNames;
 import io.quarkus.spring.data.deployment.MethodNameParser;
 import io.quarkus.spring.data.runtime.TypesConverter;
@@ -27,20 +33,36 @@ import io.quarkus.spring.data.runtime.TypesConverter;
 public class DerivedMethodsAdder extends AbstractMethodsAdder {
 
     private final IndexView index;
+    private final String operationsName;
+    private final FieldDescriptor operationsField;
 
-    public DerivedMethodsAdder(IndexView index) {
+    public DerivedMethodsAdder(IndexView index, TypeBundle typeBundle) {
         this.index = index;
+        operationsName = typeBundle.operations().dotName().toString();
+        operationsField = of(operationsName, "INSTANCE", operationsName);
     }
 
     public void add(ClassCreator classCreator, FieldDescriptor entityClassFieldDescriptor,
             String generatedClassName, ClassInfo repositoryClassInfo, ClassInfo entityClassInfo) {
         MethodNameParser methodNameParser = new MethodNameParser(entityClassInfo, index);
-        for (MethodInfo method : repositoryClassInfo.methods()) {
+        List<MethodInfo> repoMethods = new ArrayList<>(repositoryClassInfo.methods());
+        //As intermediate interfaces are supported for spring data repositories, we need to search the methods declared in such interfaced and add them to the methods to implement list
+        for (DotName extendedInterface : repositoryClassInfo.interfaceNames()) {
+            if (GenerationUtil.isIntermediateRepository(extendedInterface, index)) {
+                List<MethodInfo> methods = index.getClassByName(extendedInterface).methods();
+                repoMethods.addAll(methods);
+            }
+        }
+        for (MethodInfo method : repoMethods) {
             if (method.annotation(DotNames.SPRING_DATA_QUERY) != null) { // handled by CustomQueryMethodsAdder
                 continue;
             }
 
             if (classCreator.getExistingMethods().contains(GenerationUtil.toMethodDescriptor(generatedClassName, method))) {
+                continue;
+            }
+
+            if (!Modifier.isAbstract(method.flags())) { // skip defaults methods
                 continue;
             }
 
@@ -106,7 +128,7 @@ public class DerivedMethodsAdder extends AbstractMethodsAdder {
                                         org.springframework.data.domain.Sort.class),
                                 methodCreator.getMethodParam(sortParameterIndex));
                     } else if (parseResult.getSort() != null) {
-                        finalQuery += JpaOperations.toOrderBy(parseResult.getSort());
+                        finalQuery += PanacheJpaUtil.toOrderBy(parseResult.getSort());
                     } else if (pageableParameterIndex != null) {
                         ResultHandle pageable = methodCreator.getMethodParam(pageableParameterIndex);
                         ResultHandle pageableSort = methodCreator.invokeInterfaceMethod(
@@ -120,9 +142,10 @@ public class DerivedMethodsAdder extends AbstractMethodsAdder {
                     }
 
                     // call JpaOperations.find()
-                    ResultHandle panacheQuery = methodCreator.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(JpaOperations.class, "find", PanacheQuery.class,
+                    ResultHandle panacheQuery = methodCreator.invokeVirtualMethod(
+                            MethodDescriptor.ofMethod(AbstractJpaOperations.class, "find", Object.class,
                                     Class.class, String.class, io.quarkus.panache.common.Sort.class, Object[].class),
+                            methodCreator.readStaticField(operationsField),
                             methodCreator.readInstanceField(entityClassFieldDescriptor, methodCreator.getThis()),
                             methodCreator.load(finalQuery), sort, paramsArray);
 
@@ -143,9 +166,10 @@ public class DerivedMethodsAdder extends AbstractMethodsAdder {
                     }
 
                     // call JpaOperations.count()
-                    ResultHandle count = methodCreator.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(JpaOperations.class, "count", long.class,
+                    ResultHandle count = methodCreator.invokeVirtualMethod(
+                            MethodDescriptor.ofMethod(AbstractJpaOperations.class, "count", long.class,
                                     Class.class, String.class, Object[].class),
+                            methodCreator.readStaticField(operationsField),
                             methodCreator.readInstanceField(entityClassFieldDescriptor, methodCreator.getThis()),
                             methodCreator.load(parseResult.getQuery()), paramsArray);
 
@@ -165,9 +189,10 @@ public class DerivedMethodsAdder extends AbstractMethodsAdder {
                     }
 
                     // call JpaOperations.exists()
-                    ResultHandle exists = methodCreator.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(JpaOperations.class, "exists", boolean.class,
+                    ResultHandle exists = methodCreator.invokeVirtualMethod(
+                            MethodDescriptor.ofMethod(AbstractJpaOperations.class, "exists", boolean.class,
                                     Class.class, String.class, Object[].class),
+                            methodCreator.readStaticField(operationsField),
                             methodCreator.readInstanceField(entityClassFieldDescriptor, methodCreator.getThis()),
                             methodCreator.load(parseResult.getQuery()), paramsArray);
 
@@ -188,12 +213,18 @@ public class DerivedMethodsAdder extends AbstractMethodsAdder {
                     }
                     methodCreator.addAnnotation(Transactional.class);
 
+                    AnnotationInstance modifyingAnnotation = method.annotation(DotNames.SPRING_DATA_MODIFYING);
+                    handleFlushAutomatically(modifyingAnnotation, methodCreator, entityClassFieldDescriptor);
+
                     // call JpaOperations.delete()
                     ResultHandle delete = methodCreator.invokeStaticMethod(
-                            MethodDescriptor.ofMethod(JpaOperations.class, "delete", long.class,
-                                    Class.class, String.class, Object[].class),
+                            MethodDescriptor.ofMethod(AdditionalJpaOperations.class, "deleteWithCascade",
+                                    long.class, AbstractJpaOperations.class, Class.class, String.class, Object[].class),
+                            methodCreator.readStaticField(operationsField),
                             methodCreator.readInstanceField(entityClassFieldDescriptor, methodCreator.getThis()),
                             methodCreator.load(parseResult.getQuery()), paramsArray);
+
+                    handleClearAutomatically(modifyingAnnotation, methodCreator, entityClassFieldDescriptor);
 
                     if (DotNames.VOID.equals(returnType.name())) {
                         methodCreator.returnValue(null);

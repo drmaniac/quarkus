@@ -9,16 +9,17 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
+import java.util.HashSet;
 import java.util.Map;
-import java.util.function.BiFunction;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 import org.jboss.logging.Logger;
-import org.objectweb.asm.ClassVisitor;
 
+import io.quarkus.bootstrap.BootstrapDebug;
 import io.quarkus.bootstrap.app.CuratedApplication;
 import io.quarkus.bootstrap.app.QuarkusBootstrap;
 import io.quarkus.bootstrap.app.RunningQuarkusApplication;
@@ -26,10 +27,10 @@ import io.quarkus.bootstrap.app.StartupAction;
 import io.quarkus.bootstrap.classloading.QuarkusClassLoader;
 import io.quarkus.builder.BuildResult;
 import io.quarkus.deployment.builditem.ApplicationClassNameBuildItem;
-import io.quarkus.deployment.builditem.BytecodeTransformerBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
 import io.quarkus.deployment.builditem.GeneratedResourceBuildItem;
 import io.quarkus.deployment.builditem.MainClassBuildItem;
+import io.quarkus.deployment.builditem.TransformedClassesBuildItem;
 import io.quarkus.deployment.configuration.RunTimeConfigurationGenerator;
 import io.quarkus.dev.appstate.ApplicationStateNotification;
 import io.quarkus.runtime.Quarkus;
@@ -42,36 +43,70 @@ public class StartupActionImpl implements StartupAction {
     private final BuildResult buildResult;
     private final QuarkusClassLoader runtimeClassLoader;
 
-    public StartupActionImpl(CuratedApplication curatedApplication, BuildResult buildResult,
-            ClassLoader deploymentClassLoader) {
+    public StartupActionImpl(CuratedApplication curatedApplication, BuildResult buildResult) {
         this.curatedApplication = curatedApplication;
         this.buildResult = buildResult;
-        Map<String, List<BiFunction<String, ClassVisitor, ClassVisitor>>> bytecodeTransformers = extractTransformers();
+        Set<String> eagerClasses = new HashSet<>();
+        Map<String, byte[]> transformedClasses = extractTransformers(eagerClasses);
         QuarkusClassLoader baseClassLoader = curatedApplication.getBaseRuntimeClassLoader();
         QuarkusClassLoader runtimeClassLoader;
 
         //so we have some differences between dev and test mode here.
         //test mode only has a single class loader, while dev uses a disposable runtime class loader
         //that is discarded between restarts
+        Map<String, byte[]> resources = new HashMap<>();
+        resources.putAll(extractGeneratedResources(true));
         if (curatedApplication.getQuarkusBootstrap().getMode() == QuarkusBootstrap.Mode.DEV) {
-            baseClassLoader.reset(extractGeneratedResources(false), bytecodeTransformers, deploymentClassLoader);
+            baseClassLoader.reset(extractGeneratedResources(false),
+                    transformedClasses);
             runtimeClassLoader = curatedApplication.createRuntimeClassLoader(baseClassLoader,
-                    bytecodeTransformers,
-                    deploymentClassLoader, extractGeneratedResources(true));
+                    resources, transformedClasses);
         } else {
-            Map<String, byte[]> resources = new HashMap<>();
             resources.putAll(extractGeneratedResources(false));
-            resources.putAll(extractGeneratedResources(true));
-            baseClassLoader.reset(resources, bytecodeTransformers, deploymentClassLoader);
+            baseClassLoader.reset(resources, transformedClasses);
             runtimeClassLoader = baseClassLoader;
         }
         this.runtimeClassLoader = runtimeClassLoader;
     }
 
+    private void handleEagerClasses(QuarkusClassLoader runtimeClassLoader, Set<String> eagerClasses) {
+        int availableProcessors = Runtime.getRuntime().availableProcessors();
+        if (availableProcessors == 1) {
+            return;
+        }
+        //leave one processor for the main startup thread
+        ExecutorService loadingExecutor = Executors.newFixedThreadPool(availableProcessors - 1);
+        for (String i : eagerClasses) {
+            loadingExecutor.submit(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        //no need to restore the old TCCL, this thread is going away
+                        Thread.currentThread().setContextClassLoader(runtimeClassLoader);
+                        runtimeClassLoader.loadClass(i);
+                    } catch (ClassNotFoundException e) {
+                        log.debug("Failed to eagerly load class", e);
+                        //we just ignore this for now, the problem
+                        //will be reported for real in the startup sequence
+                    }
+                }
+            });
+        }
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                //when all the jobs are done we shut down
+                //we do this in a new thread to allow the main thread to continue doing startup
+                loadingExecutor.shutdown();
+            }
+        });
+        t.start();
+    }
+
     /**
      * Runs the application by running the main method of the main class. As this is a blocking method a new
      * thread is created to run this task.
-     * 
+     *
      * Before this method is called an appropriate exit handler will likely need to
      * be set in {@link io.quarkus.runtime.ApplicationLifecycleManager#setDefaultExitCodeHandler(Consumer)}
      * of the JVM will exit when the app stops.
@@ -96,7 +131,7 @@ public class StartupActionImpl implements StartupAction {
                 public void run() {
                     Thread.currentThread().setContextClassLoader(runtimeClassLoader);
                     try {
-                        start.invoke(null, (Object) args);
+                        start.invoke(null, (Object) (args == null ? new String[0] : args));
                     } catch (Throwable e) {
                         log.error("Error running Quarkus", e);
                         //this can happen if we did not make it to application init
@@ -216,17 +251,18 @@ public class StartupActionImpl implements StartupAction {
         return runtimeClassLoader;
     }
 
-    private Map<String, List<BiFunction<String, ClassVisitor, ClassVisitor>>> extractTransformers() {
-        Map<String, List<BiFunction<String, ClassVisitor, ClassVisitor>>> bytecodeTransformers = new HashMap<>();
-        List<BytecodeTransformerBuildItem> transformers = buildResult.consumeMulti(BytecodeTransformerBuildItem.class);
-        for (BytecodeTransformerBuildItem i : transformers) {
-            List<BiFunction<String, ClassVisitor, ClassVisitor>> list = bytecodeTransformers.get(i.getClassToTransform());
-            if (list == null) {
-                bytecodeTransformers.put(i.getClassToTransform(), list = new ArrayList<>());
+    private Map<String, byte[]> extractTransformers(Set<String> eagerClasses) {
+        Map<String, byte[]> ret = new HashMap<>();
+        TransformedClassesBuildItem transformers = buildResult.consume(TransformedClassesBuildItem.class);
+        for (Set<TransformedClassesBuildItem.TransformedClass> i : transformers.getTransformedClassesByJar().values()) {
+            for (TransformedClassesBuildItem.TransformedClass clazz : i) {
+                ret.put(clazz.getFileName(), clazz.getData());
+                if (clazz.isEager()) {
+                    eagerClasses.add(clazz.getClassName());
+                }
             }
-            list.add(i.getVisitorFunction());
         }
-        return bytecodeTransformers;
+        return ret;
     }
 
     private Map<String, byte[]> extractGeneratedResources(boolean applicationClasses) {

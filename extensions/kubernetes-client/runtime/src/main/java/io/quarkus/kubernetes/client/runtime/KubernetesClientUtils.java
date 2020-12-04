@@ -8,15 +8,17 @@ import io.fabric8.kubernetes.client.Config;
 import io.fabric8.kubernetes.client.ConfigBuilder;
 import io.fabric8.kubernetes.client.DefaultKubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.quarkus.runtime.TlsConfig;
 
 public class KubernetesClientUtils {
 
     private static final String PREFIX = "quarkus.kubernetes-client.";
 
-    public static Config createConfig(KubernetesClientBuildConfig buildConfig) {
-        Config base = new Config();
+    public static Config createConfig(KubernetesClientBuildConfig buildConfig, TlsConfig tlsConfig) {
+        Config base = Config.autoConfigure(null);
+        boolean trustAll = buildConfig.trustCerts.isPresent() ? buildConfig.trustCerts.get() : tlsConfig.trustAll;
         return new ConfigBuilder()
-                .withTrustCerts(buildConfig.trustCerts)
+                .withTrustCerts(trustAll)
                 .withWatchReconnectInterval((int) buildConfig.watchReconnectInterval.toMillis())
                 .withWatchReconnectLimit(buildConfig.watchReconnectLimit)
                 .withConnectionTimeout((int) buildConfig.connectionTimeout.toMillis())
@@ -26,6 +28,7 @@ public class KubernetesClientUtils {
                 .withNamespace(buildConfig.namespace.orElse(base.getNamespace()))
                 .withUsername(buildConfig.username.orElse(base.getUsername()))
                 .withPassword(buildConfig.password.orElse(base.getPassword()))
+                .withOauthToken(buildConfig.token.orElse(base.getOauthToken()))
                 .withCaCertFile(buildConfig.caCertFile.orElse(base.getCaCertFile()))
                 .withCaCertData(buildConfig.caCertData.orElse(base.getCaCertData()))
                 .withClientCertFile(buildConfig.clientCertFile.orElse(base.getClientCertFile()))
@@ -38,17 +41,17 @@ public class KubernetesClientUtils {
                 .withHttpsProxy(buildConfig.httpsProxy.orElse(base.getHttpsProxy()))
                 .withProxyUsername(buildConfig.proxyUsername.orElse(base.getProxyUsername()))
                 .withProxyPassword(buildConfig.proxyPassword.orElse(base.getProxyPassword()))
-                .withNoProxy(buildConfig.noProxy.isPresent() ? buildConfig.noProxy.get() : base.getNoProxy())
+                .withNoProxy(buildConfig.noProxy.orElse(base.getNoProxy()))
                 .build();
     }
 
-    public static KubernetesClient createClient(KubernetesClientBuildConfig buildConfig) {
-        return new DefaultKubernetesClient(createConfig(buildConfig));
+    public static KubernetesClient createClient(KubernetesClientBuildConfig buildConfig, TlsConfig tlsConfig) {
+        return new DefaultKubernetesClient(createConfig(buildConfig, tlsConfig));
     }
 
     public static KubernetesClient createClient() {
         org.eclipse.microprofile.config.Config config = ConfigProvider.getConfig();
-        Config base = new Config();
+        Config base = Config.autoConfigure(null);
         return new DefaultKubernetesClient(new ConfigBuilder()
                 .withTrustCerts(config.getOptionalValue(PREFIX + "trust-certs", Boolean.class).orElse(base.isTrustCerts()))
                 .withWatchReconnectLimit(config.getOptionalValue(PREFIX + "watch-reconnect-limit", Integer.class)

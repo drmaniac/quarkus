@@ -11,6 +11,7 @@ import io.quarkus.bootstrap.model.AppModel;
 import java.io.Closeable;
 import java.io.Serializable;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -18,10 +19,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import org.objectweb.asm.ClassVisitor;
 
 /**
  * The result of the curate step that is done by QuarkusBootstrap.
@@ -40,7 +39,7 @@ public class CuratedApplication implements Serializable, Closeable {
      *
      * This should not be used for hot reloadable elements
      */
-    private final Map<AppArtifact, ClassPathElement> augmentationElements = new HashMap<>();
+    private final Map<AppArtifact, List<ClassPathElement>> augmentationElements = new HashMap<>();
 
     /**
      * The augmentation class loader.
@@ -54,6 +53,7 @@ public class CuratedApplication implements Serializable, Closeable {
 
     private final QuarkusBootstrap quarkusBootstrap;
     private final CurationResult curationResult;
+
     final AppModel appModel;
 
     CuratedApplication(QuarkusBootstrap quarkusBootstrap, CurationResult curationResult) {
@@ -141,15 +141,20 @@ public class CuratedApplication implements Serializable, Closeable {
             consumer.accept(ClassPathElement.EMPTY);
             return;
         }
-        if (augmentationElements.containsKey(artifact)) {
-            consumer.accept(augmentationElements.get(artifact));
+        List<ClassPathElement> cpeList = augmentationElements.get(artifact);
+        if (cpeList != null) {
+            for (ClassPathElement cpe : cpeList) {
+                consumer.accept(cpe);
+            }
             return;
         }
-        artifact.getPaths().forEach(path -> {
+        cpeList = new ArrayList<>(2);
+        for (Path path : artifact.getPaths()) {
             final ClassPathElement element = ClassPathElement.fromPath(path);
-            augmentationElements.put(artifact, element);
             consumer.accept(element);
-        });
+            cpeList.add(element);
+        }
+        augmentationElements.put(artifact, cpeList);
     }
 
     private void addCpElement(QuarkusClassLoader.Builder builder, AppArtifact dep, ClassPathElement element) {
@@ -176,8 +181,6 @@ public class CuratedApplication implements Serializable, Closeable {
                 processCpElement(i.getArtifact(), element -> addCpElement(builder, i.getArtifact(), element));
             }
 
-            processCpElement(appModel.getAppArtifact(), element -> addCpElement(builder, appModel.getAppArtifact(), element));
-
             for (Path i : quarkusBootstrap.getAdditionalDeploymentArchives()) {
                 builder.addElement(ClassPathElement.fromPath(i));
             }
@@ -203,25 +206,20 @@ public class CuratedApplication implements Serializable, Closeable {
                 //in test mode we have everything in the base class loader
                 //there is no need to restart so there is no need for an additional CL
 
-                for (AdditionalDependency i : quarkusBootstrap.getAdditionalApplicationArchives()) {
-                    //src/test is the highest priority
-                    if (i.isTestClassRoot()) {
-                        builder.addElement(ClassPathElement.fromPath(i.getArchivePath()));
-                    }
-                }
-
-                if (quarkusBootstrap.getApplicationRoot() != null) {
-                    builder.addElement(ClassPathElement.fromPath(quarkusBootstrap.getApplicationRoot()));
+                for (Path root : quarkusBootstrap.getApplicationRoot()) {
+                    builder.addElement(ClassPathElement.fromPath(root));
                 }
             }
             //additional user class path elements first
             Set<Path> hotReloadPaths = new HashSet<>();
             for (AdditionalDependency i : quarkusBootstrap.getAdditionalApplicationArchives()) {
-                if (!i.isTestClassRoot()) {
-                    if (!i.isHotReloadable()) {
-                        builder.addElement(ClassPathElement.fromPath(i.getArchivePath()));
-                    } else {
-                        hotReloadPaths.add(i.getArchivePath());
+                if (!i.isHotReloadable()) {
+                    for (Path root : i.getArchivePath()) {
+                        builder.addElement(ClassPathElement.fromPath(root));
+                    }
+                } else {
+                    for (Path root : i.getArchivePath()) {
+                        hotReloadPaths.add(root);
                     }
                 }
             }
@@ -233,8 +231,6 @@ public class CuratedApplication implements Serializable, Closeable {
                 }
                 processCpElement(dependency.getArtifact(), element -> addCpElement(builder, dependency.getArtifact(), element));
             }
-
-            processCpElement(appModel.getAppArtifact(), element -> addCpElement(builder, appModel.getAppArtifact(), element));
 
             baseRuntimeClassLoader = builder.build();
         }
@@ -255,44 +251,41 @@ public class CuratedApplication implements Serializable, Closeable {
         QuarkusClassLoader.Builder builder = QuarkusClassLoader.builder("Deployment Class Loader",
                 getAugmentClassLoader(), false)
                 .setAggregateParentResources(true);
-        //add the application root, and test roots
-        for (AdditionalDependency i : quarkusBootstrap.getAdditionalApplicationArchives()) {
-            if (i.isTestClassRoot()) {
-                builder.addElement(ClassPathElement.fromPath(i.getArchivePath()));
-            }
+
+        for (Path root : quarkusBootstrap.getApplicationRoot()) {
+            builder.addElement(ClassPathElement.fromPath(root));
         }
 
-        if (quarkusBootstrap.getApplicationRoot() != null) {
-            builder.addElement(ClassPathElement.fromPath(quarkusBootstrap.getApplicationRoot()));
-        }
+        builder.setResettableElement(new MemoryClassPathElement(Collections.emptyMap()));
 
         //additional user class path elements first
         for (AdditionalDependency i : quarkusBootstrap.getAdditionalApplicationArchives()) {
-            if (!i.isTestClassRoot()) {
-                builder.addElement(ClassPathElement.fromPath(i.getArchivePath()));
+            for (Path root : i.getArchivePath()) {
+                builder.addElement(ClassPathElement.fromPath(root));
             }
         }
         return builder.build();
     }
 
     public QuarkusClassLoader createRuntimeClassLoader(QuarkusClassLoader loader,
-            Map<String, List<BiFunction<String, ClassVisitor, ClassVisitor>>> bytecodeTransformers,
-            ClassLoader deploymentClassLoader, Map<String, byte[]> resources) {
+            Map<String, byte[]> resources, Map<String, byte[]> transformedClasses) {
         QuarkusClassLoader.Builder builder = QuarkusClassLoader.builder("Quarkus Runtime ClassLoader",
                 loader, false)
                 .setAggregateParentResources(true);
-        builder.setTransformerClassLoader(deploymentClassLoader);
-        if (quarkusBootstrap.getApplicationRoot() != null) {
-            builder.addElement(ClassPathElement.fromPath(quarkusBootstrap.getApplicationRoot()));
-        }
+        builder.setTransformedClasses(transformedClasses);
+
         builder.addElement(new MemoryClassPathElement(resources));
+        for (Path root : quarkusBootstrap.getApplicationRoot()) {
+            builder.addElement(ClassPathElement.fromPath(root));
+        }
 
         for (AdditionalDependency i : getQuarkusBootstrap().getAdditionalApplicationArchives()) {
             if (i.isHotReloadable()) {
-                builder.addElement(ClassPathElement.fromPath(i.getArchivePath()));
+                for (Path root : i.getArchivePath()) {
+                    builder.addElement(ClassPathElement.fromPath(root));
+                }
             }
         }
-        builder.setBytecodeTransformers(bytecodeTransformers);
         return builder.build();
     }
 

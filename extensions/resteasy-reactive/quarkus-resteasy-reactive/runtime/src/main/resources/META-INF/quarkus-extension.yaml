@@ -1,0 +1,12 @@
+---
+name: "RESTEasy Reactive"
+metadata:
+  short-name: "resteasy-reactive"
+  keywords:
+  - "jaxrs"
+  - "web"
+  - "rest"
+  categories:
+  - "web"
+  - "reactive"
+  status: "experimental"

@@ -22,7 +22,8 @@ import io.quarkus.arc.processor.BuildExtension;
 import io.quarkus.arc.processor.BuiltinScope;
 import io.quarkus.arc.processor.DotNames;
 import io.quarkus.arc.processor.InjectionPointInfo;
-import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.builditem.CapabilityBuildItem;
@@ -34,12 +35,12 @@ import io.quarkus.smallrye.jwt.runtime.auth.JWTAuthMechanism;
 import io.quarkus.smallrye.jwt.runtime.auth.JwtPrincipalProducer;
 import io.quarkus.smallrye.jwt.runtime.auth.MpJwtValidator;
 import io.quarkus.smallrye.jwt.runtime.auth.RawOptionalClaimCreator;
-import io.smallrye.jwt.algorithm.SignatureAlgorithm;
 import io.smallrye.jwt.auth.cdi.ClaimValueProducer;
 import io.smallrye.jwt.auth.cdi.CommonJwtProducer;
+import io.smallrye.jwt.auth.cdi.JWTCallerPrincipalFactoryProducer;
 import io.smallrye.jwt.auth.cdi.JsonValueProducer;
 import io.smallrye.jwt.auth.cdi.RawClaimTypeProducer;
-import io.smallrye.jwt.build.impl.JwtProviderImpl;
+import io.smallrye.jwt.auth.principal.DefaultJWTParser;
 import io.smallrye.jwt.config.JWTAuthContextInfoProvider;
 
 /**
@@ -52,11 +53,11 @@ class SmallRyeJwtProcessor {
     private static final DotName CLAIM_NAME = DotName.createSimple(Claim.class.getName());
     private static final DotName CLAIMS_NAME = DotName.createSimple(Claims.class.getName());
 
-    SmallryeJWTConfig config;
+    SmallRyeJWTConfig config;
 
     @BuildStep
     CapabilityBuildItem capability() {
-        return new CapabilityBuildItem(Capabilities.JWT);
+        return new CapabilityBuildItem(Capability.JWT);
     }
 
     /**
@@ -76,15 +77,14 @@ class SmallRyeJwtProcessor {
         }
         AdditionalBeanBuildItem.Builder removable = AdditionalBeanBuildItem.builder();
         removable.addBeanClass(JWTAuthContextInfoProvider.class);
+        removable.addBeanClass(DefaultJWTParser.class);
         removable.addBeanClass(CommonJwtProducer.class);
         removable.addBeanClass(RawClaimTypeProducer.class);
         removable.addBeanClass(JsonValueProducer.class);
         removable.addBeanClass(JwtPrincipalProducer.class);
+        removable.addBeanClass(JWTCallerPrincipalFactoryProducer.class);
         removable.addBeanClass(Claim.class);
         additionalBeans.produce(removable.build());
-
-        reflectiveClasses.produce(new ReflectiveClassBuildItem(true, true, SignatureAlgorithm.class));
-        reflectiveClasses.produce(new ReflectiveClassBuildItem(true, true, JwtProviderImpl.class));
     }
 
     /**
@@ -94,7 +94,7 @@ class SmallRyeJwtProcessor {
      */
     @BuildStep
     FeatureBuildItem feature() {
-        return new FeatureBuildItem(FeatureBuildItem.SMALLRYE_JWT);
+        return new FeatureBuildItem(Feature.SMALLRYE_JWT);
     }
 
     /**

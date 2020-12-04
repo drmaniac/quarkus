@@ -8,6 +8,7 @@ import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.groupingBy;
 import static java.util.stream.Collectors.toList;
 
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,8 +16,12 @@ import java.util.function.Function;
 import java.util.stream.IntStream;
 
 import io.quarkus.vault.VaultException;
+import io.quarkus.vault.VaultTransitExportKeyType;
+import io.quarkus.vault.VaultTransitKeyDetail;
 import io.quarkus.vault.VaultTransitSecretEngine;
 import io.quarkus.vault.runtime.client.VaultClient;
+import io.quarkus.vault.runtime.client.VaultClientException;
+import io.quarkus.vault.runtime.client.dto.transit.VaultTransitCreateKeyBody;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitDecrypt;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitDecryptBatchInput;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitDecryptBody;
@@ -25,6 +30,9 @@ import io.quarkus.vault.runtime.client.dto.transit.VaultTransitEncrypt;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitEncryptBatchInput;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitEncryptBody;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitEncryptDataBatchResult;
+import io.quarkus.vault.runtime.client.dto.transit.VaultTransitKeyConfigBody;
+import io.quarkus.vault.runtime.client.dto.transit.VaultTransitKeyExport;
+import io.quarkus.vault.runtime.client.dto.transit.VaultTransitReadKeyData;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitRewrapBatchInput;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitRewrapBody;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitSign;
@@ -45,6 +53,8 @@ import io.quarkus.vault.runtime.transit.VerificationResult;
 import io.quarkus.vault.transit.ClearData;
 import io.quarkus.vault.transit.DecryptionRequest;
 import io.quarkus.vault.transit.EncryptionRequest;
+import io.quarkus.vault.transit.KeyConfigRequestDetail;
+import io.quarkus.vault.transit.KeyCreationRequestDetail;
 import io.quarkus.vault.transit.RewrappingRequest;
 import io.quarkus.vault.transit.SigningInput;
 import io.quarkus.vault.transit.SigningRequest;
@@ -53,6 +63,7 @@ import io.quarkus.vault.transit.VaultDecryptionBatchException;
 import io.quarkus.vault.transit.VaultEncryptionBatchException;
 import io.quarkus.vault.transit.VaultRewrappingBatchException;
 import io.quarkus.vault.transit.VaultSigningBatchException;
+import io.quarkus.vault.transit.VaultTransitKeyExportDetail;
 import io.quarkus.vault.transit.VaultVerificationBatchException;
 import io.quarkus.vault.transit.VerificationRequest;
 
@@ -79,8 +90,37 @@ public class VaultTransitManager implements VaultTransitSecretEngine {
         return encryptBatch(keyName, singletonList(item)).get(0).getValueOrElseError();
     }
 
+    // workaround https://github.com/hashicorp/vault/issues/10232
+    private String encrypt(String keyName, EncryptionRequest request) {
+        VaultTransitEncryptBody body = new VaultTransitEncryptBody();
+        body.plaintext = Base64String.from(request.getData().getValue());
+        body.context = Base64String.from(request.getContext());
+        body.keyVersion = request.getKeyVersion();
+
+        TransitKeyConfig config = serverConfig.transit.key.get(keyName);
+        if (config != null) {
+            keyName = config.name.orElse(keyName);
+            body.type = config.type.orElse(null);
+            body.convergentEncryption = config.convergentEncryption.orElse(null);
+        }
+        VaultTransitEncrypt encrypt = vaultClient.encrypt(getToken(), keyName, body);
+        EncryptionResult result = new EncryptionResult(encrypt.data.ciphertext, encrypt.data.error);
+        if (result.isInError()) {
+            Map<EncryptionRequest, EncryptionResult> errorMap = new HashMap<>();
+            errorMap.put(request, result);
+            throw new VaultEncryptionBatchException("encryption error with key " + keyName, errorMap);
+        }
+        return result.getValue();
+    }
+
     @Override
     public Map<EncryptionRequest, String> encrypt(String keyName, List<EncryptionRequest> requests) {
+        if (requests.size() == 1) {
+            EncryptionRequest request = requests.get(0);
+            Map<EncryptionRequest, String> result = new HashMap<>();
+            result.put(request, encrypt(keyName, request));
+            return result;
+        }
         List<EncryptionResult> results = encryptBatch(keyName, requests);
         checkBatchErrors(results,
                 errors -> new VaultEncryptionBatchException(errors + " encryption errors", zip(requests, results)));
@@ -266,6 +306,81 @@ public class VaultTransitManager implements VaultTransitSecretEngine {
 
         VaultTransitVerify verify = vaultClient.verify(getToken(), keyName, hashAlgorithm, body);
         return verify.data.batchResults.stream().map(this::getVaultTransitVerifyBatchResult).collect(toList());
+    }
+
+    @Override
+    public void createKey(String keyName, KeyCreationRequestDetail detail) {
+        VaultTransitCreateKeyBody body = new VaultTransitCreateKeyBody();
+        if (detail != null) {
+            body.allowPlaintextBackup = detail.getAllowPlaintextBackup();
+            body.convergentEncryption = detail.getConvergentEncryption();
+            body.derived = detail.getDerived();
+            body.exportable = detail.getExportable();
+            body.type = detail.getType();
+        }
+        vaultClient.createTransitKey(getToken(), keyName, body);
+    }
+
+    @Override
+    public void updateKeyConfiguration(String keyName, KeyConfigRequestDetail detail) {
+        VaultTransitKeyConfigBody body = new VaultTransitKeyConfigBody();
+        body.allowPlaintextBackup = detail.getAllowPlaintextBackup();
+        body.deletionAllowed = detail.getDeletionAllowed();
+        body.minEncryptionVersion = detail.getMinEncryptionVersion();
+        body.minDecryptionVersion = detail.getMinDecryptionVersion();
+        body.exportable = detail.getExportable();
+        vaultClient.updateTransitKeyConfiguration(getToken(), keyName, body);
+    }
+
+    @Override
+    public void deleteKey(String keyName) {
+        vaultClient.deleteTransitKey(getToken(), keyName);
+    }
+
+    @Override
+    public VaultTransitKeyExportDetail exportKey(String keyName, VaultTransitExportKeyType keyType, String keyVersion) {
+        VaultTransitKeyExport keyExport = vaultClient.exportTransitKey(getToken(), keyType.name() + "-key", keyName,
+                keyVersion);
+        VaultTransitKeyExportDetail detail = new VaultTransitKeyExportDetail();
+        detail.setName(keyExport.data.name);
+        detail.setKeys(keyExport.data.keys);
+        return detail;
+    }
+
+    @Override
+    public VaultTransitKeyDetail readKey(String keyName) {
+        try {
+            return map(vaultClient.readTransitKey(getToken(), keyName).data);
+        } catch (VaultClientException e) {
+            if (e.getStatus() == 404) {
+                return null;
+            } else {
+                throw e;
+            }
+        }
+    }
+
+    @Override
+    public List<String> listKeys() {
+        return vaultClient.listTransitKeys(getToken()).data.keys;
+    }
+
+    protected VaultTransitKeyDetail map(VaultTransitReadKeyData data) {
+        VaultTransitKeyDetail result = new VaultTransitKeyDetail();
+        result.setDetail(data.detail);
+        result.setDeletionAllowed(data.deletionAllowed);
+        result.setDerived(data.derived);
+        result.setExportable(data.exportable);
+        result.setAllowPlaintextBackup(data.allowPlaintextBackup);
+        result.setKeys(data.keys);
+        result.setMinDecryptionVersion(data.minDecryptionVersion);
+        result.setMinEncryptionVersion(data.minEncryptionVersion);
+        result.setName(data.name);
+        result.setSupportsEncryption(data.supportsEncryption);
+        result.setSupportsDecryption(data.supportsDecryption);
+        result.setSupportsDerivation(data.supportsDerivation);
+        result.setSupportsSigning(data.supportsSigning);
+        return result;
     }
 
     // ---

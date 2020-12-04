@@ -1,6 +1,7 @@
 package io.quarkus.qute;
 
 import io.quarkus.qute.Expression.Part;
+import io.quarkus.qute.ExpressionImpl.PartImpl;
 import io.quarkus.qute.Results.Result;
 import java.util.Collections;
 import java.util.Iterator;
@@ -71,27 +72,44 @@ class EvaluatorImpl implements Evaluator {
         EvalContextImpl evalContext = new EvalContextImpl(tryParent, ref, part, resolutionContext);
         if (!parts.hasNext()) {
             // The last part - no need to compose
-            return resolve(evalContext, resolvers.iterator());
+            return resolve(evalContext, resolvers.iterator(), true);
         } else {
-            return resolve(evalContext, resolvers.iterator())
-                    .thenCompose(r -> {
-                        if (parts.hasNext()) {
-                            return resolveReference(tryParent, r, parts, resolutionContext);
-                        } else {
-                            return CompletableFuture.completedFuture(r);
-                        }
-                    });
+            // Next part - no need to try the parent context/outer scope
+            return resolve(evalContext, resolvers.iterator(), true)
+                    .thenCompose(r -> resolveReference(false, r, parts, resolutionContext));
         }
     }
 
-    private CompletionStage<Object> resolve(EvalContextImpl evalContext, Iterator<ValueResolver> resolvers) {
+    @SuppressWarnings("unchecked")
+    private CompletionStage<Object> resolve(EvalContextImpl evalContext, Iterator<ValueResolver> resolvers,
+            boolean tryCachedResolver) {
+
+        if (tryCachedResolver) {
+            // Try the cached resolver first
+            ValueResolver cachedResolver = ((PartImpl) evalContext.part).cachedResolver;
+            if (cachedResolver != null && cachedResolver.appliesTo(evalContext)) {
+                return cachedResolver.resolve(evalContext).thenCompose(r -> {
+                    if (Result.NOT_FOUND.equals(r)) {
+                        return resolve(evalContext, resolvers, false);
+                    } else {
+                        if (r instanceof CompletionStage) {
+                            // If the result is a completion stage return it as is
+                            return (CompletionStage<Object>) r;
+                        }
+                        return CompletableFuture.completedFuture(r);
+                    }
+                });
+            }
+        }
+
         if (!resolvers.hasNext()) {
             ResolutionContext parent = evalContext.resolutionContext.getParent();
             if (evalContext.tryParent && parent != null) {
                 // Continue with parent context
                 return resolve(
-                        new EvalContextImpl(true, parent.getData(), evalContext.name, evalContext.params, parent),
-                        this.resolvers.iterator());
+                        new EvalContextImpl(true, parent.getData(), evalContext.name, evalContext.params, parent,
+                                evalContext.part),
+                        this.resolvers.iterator(), false);
             }
             LOGGER.tracef("Unable to resolve %s", evalContext);
             return Results.NOT_FOUND;
@@ -100,14 +118,21 @@ class EvaluatorImpl implements Evaluator {
         if (resolver.appliesTo(evalContext)) {
             return resolver.resolve(evalContext).thenCompose(r -> {
                 if (Result.NOT_FOUND.equals(r)) {
-                    return resolve(evalContext, resolvers);
+                    // Result not found - try the next resolver
+                    return resolve(evalContext, resolvers, false);
                 } else {
+                    // Cache the first resolver where a result is found
+                    ((PartImpl) evalContext.part).setCachedResolver(resolver);
+                    if (r instanceof CompletionStage) {
+                        // If the result is a completion stage return it as is
+                        return (CompletionStage<Object>) r;
+                    }
                     return CompletableFuture.completedFuture(r);
                 }
             });
         } else {
-            // Try next resolver
-            return resolve(evalContext, resolvers);
+            // Try the next resolver
+            return resolve(evalContext, resolvers, false);
         }
     }
 
@@ -118,20 +143,22 @@ class EvaluatorImpl implements Evaluator {
         final String name;
         final List<Expression> params;
         final ResolutionContext resolutionContext;
+        final Part part;
 
         EvalContextImpl(boolean tryParent, Object base, Part part, ResolutionContext resolutionContext) {
             this(tryParent, base, part.getName(),
                     part.isVirtualMethod() ? part.asVirtualMethod().getParameters() : Collections.emptyList(),
-                    resolutionContext);
+                    resolutionContext, part);
         }
 
         EvalContextImpl(boolean tryParent, Object base, String name, List<Expression> params,
-                ResolutionContext resolutionContext) {
+                ResolutionContext resolutionContext, Part part) {
             this.tryParent = tryParent;
             this.base = base;
             this.resolutionContext = resolutionContext;
             this.params = params;
             this.name = name;
+            this.part = part;
         }
 
         @Override
@@ -157,6 +184,11 @@ class EvaluatorImpl implements Evaluator {
         @Override
         public CompletionStage<Object> evaluate(Expression expression) {
             return resolutionContext.evaluate(expression);
+        }
+
+        @Override
+        public Object getAttribute(String key) {
+            return resolutionContext.getAttribute(key);
         }
 
         @Override

@@ -1,6 +1,6 @@
 package io.quarkus.runtime;
 
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
 import org.jboss.logging.Logger;
 import org.jboss.logmanager.LogManager;
@@ -9,7 +9,7 @@ import io.quarkus.launcher.QuarkusLauncher;
 
 /**
  * The entry point for applications that use a main method. Quarkus will shut down when the main method returns.
- * 
+ *
  * If this application has already been generated then it will be run directly, otherwise it will be launched
  * in dev mode and augmentation will be done automatically.
  *
@@ -17,7 +17,7 @@ import io.quarkus.launcher.QuarkusLauncher;
  * will block until shutdown is initiated, either from an external signal or by a call to one of the exit methods.
  *
  * If no main class is specified then one is generated automatically that will simply wait to exit after Quarkus is booted.
- * 
+ *
  */
 public class Quarkus {
 
@@ -26,11 +26,11 @@ public class Quarkus {
 
     /**
      * Runs a quarkus application, that will run until the provided {@link QuarkusApplication} has completed.
-     * 
+     *
      * Note that if this is run from the IDE the application will run in a different class loader to the
      * calling class. It is recommended that the calling class do no logic, and instead this logic should
      * go into the QuarkusApplication.
-     * 
+     *
      * @param quarkusApplication The application to run, or null
      * @param args The command line parameters
      */
@@ -40,16 +40,17 @@ public class Quarkus {
 
     /**
      * Runs a quarkus application, that will run until the provided {@link QuarkusApplication} has completed.
-     * 
+     *
      * Note that if this is run from the IDE the application will run in a different class loader to the
      * calling class. It is recommended that the calling class do no logic, and instead this logic should
      * go into the QuarkusApplication.
      *
      * @param quarkusApplication The application to run, or null
-     * @param exitHandler The handler that is called with the exit code when the application has finished
+     * @param exitHandler The handler that is called with the exit code and any exception (if any) thrown when the application
+     *        has finished
      * @param args The command line parameters
      */
-    public static void run(Class<? extends QuarkusApplication> quarkusApplication, Consumer<Integer> exitHandler,
+    public static void run(Class<? extends QuarkusApplication> quarkusApplication, BiConsumer<Integer, Throwable> exitHandler,
             String... args) {
         try {
             System.setProperty("java.util.logging.manager", LogManager.class.getName());
@@ -63,12 +64,11 @@ public class Quarkus {
         } catch (ClassNotFoundException e) {
             //ignore, this happens when running in dev mode
         } catch (Exception e) {
-            //TODO: exception mappers
-            Logger.getLogger(Quarkus.class).error("Error running Quarkus", e);
             if (exitHandler != null) {
-                exitHandler.accept(1);
+                exitHandler.accept(1, e);
             } else {
-                ApplicationLifecycleManager.getDefaultExitCodeHandler().accept(1);
+                Logger.getLogger(Quarkus.class).error("Error running Quarkus", e);
+                ApplicationLifecycleManager.getDefaultExitCodeHandler().accept(1, e);
             }
             return;
         }
@@ -76,12 +76,11 @@ public class Quarkus {
         //dev mode path, i.e. launching from the IDE
         //this is not the quarkus:dev path as it will augment before
         //calling this method
-        launchFromIDE(quarkusApplication, exitHandler, args);
+        launchFromIDE(quarkusApplication, args);
 
     }
 
-    private static void launchFromIDE(Class<? extends QuarkusApplication> quarkusApplication, Consumer<Integer> exitHandler,
-            String... args) {
+    private static void launchFromIDE(Class<? extends QuarkusApplication> quarkusApplication, String... args) {
         //some trickery, get the class that has invoked us, and use this to figure out the
         //classes root
         StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
@@ -90,8 +89,7 @@ public class Quarkus {
             pos++;
         }
         String callingClass = stackTrace[pos].getClassName();
-        QuarkusLauncher.launch(callingClass, quarkusApplication == null ? null : quarkusApplication.getName(), exitHandler,
-                args);
+        QuarkusLauncher.launch(callingClass, quarkusApplication == null ? null : quarkusApplication.getName(), args);
     }
 
     /**
@@ -99,7 +97,7 @@ public class Quarkus {
      * or one of the exit methods is called.
      *
      * This method does not return, as System.exit() is called after the application is finished.
-     * 
+     *
      * @param args The command line parameters
      */
     public static void run(String... args) {
@@ -118,7 +116,7 @@ public class Quarkus {
      * thread that the application is done so that shutdown can run when the main thread returns).
      *
      * The error code supplied here will override the value returned from the main application.
-     * 
+     *
      * @param code The exit code. This may be overridden if an exception occurs on shutdown
      */
     public static void asyncExit(int code) {

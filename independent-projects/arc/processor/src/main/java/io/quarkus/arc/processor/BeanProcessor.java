@@ -11,16 +11,19 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import javax.annotation.Priority;
 import org.jboss.jandex.AnnotationInstance;
+import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
 import org.jboss.jandex.IndexView;
 import org.jboss.logging.Logger;
@@ -28,14 +31,15 @@ import org.jboss.logging.Logger;
 /**
  * An integrator should create a new instance of the bean processor using the convenient {@link Builder} and then invoke the
  * "processing" methods in the following order:
- * 
+ *
  * <ol>
  * <li>{@link #registerCustomContexts()}</li>
+ * <li>{@link #registerScopes()}</li>
  * <li>{@link #registerBeans()}</li>
  * <li>{@link #initialize(Consumer)}</li>
  * <li>{@link #validate(Consumer)}</li>
  * <li>{@link #processValidationErrors(io.quarkus.arc.processor.BeanDeploymentValidator.ValidationContext)}</li>
- * <li>{@link #generateResources(ReflectionRegistration)}</li>
+ * <li>{@link #generateResources(ReflectionRegistration, Set, Consumer)}</li>
  * </ol>
  */
 public class BeanProcessor {
@@ -50,7 +54,7 @@ public class BeanProcessor {
 
     private final String name;
     private final ResourceOutput output;
-    private final boolean sharedAnnotationLiterals;
+    private final AnnotationLiteralProcessor annotationLiterals;
     private final ReflectionRegistration reflectionRegistration;
     private final List<BeanRegistrar> beanRegistrars;
     private final List<ContextRegistrar> contextRegistrars;
@@ -61,62 +65,50 @@ public class BeanProcessor {
     private final BeanDeployment beanDeployment;
     private final boolean generateSources;
     private final boolean allowMocking;
+    private final boolean transformUnproxyableClasses;
 
-    private BeanProcessor(String name, IndexView index, Collection<BeanDefiningAnnotation> additionalBeanDefiningAnnotations,
-            ResourceOutput output,
-            boolean sharedAnnotationLiterals,
-            ReflectionRegistration reflectionRegistration,
-            List<AnnotationsTransformer> annotationTransformers,
-            List<InjectionPointsTransformer> injectionPointsTransformers,
-            List<ObserverTransformer> observerTransformers,
-            Collection<DotName> resourceAnnotations,
-            List<BeanRegistrar> beanRegistrars,
-            List<ObserverRegistrar> observerRegistrars,
-            List<ContextRegistrar> contextRegistrars,
-            List<BeanDeploymentValidator> beanDeploymentValidators,
-            Predicate<DotName> applicationClassPredicate,
-            boolean unusedBeansRemovalEnabled,
-            List<Predicate<BeanInfo>> unusedExclusions,
-            Map<DotName, Collection<AnnotationInstance>> additionalStereotypes,
-            List<InterceptorBindingRegistrar> interceptorBindingRegistrars,
-            boolean transformUnproxyableClasses,
-            boolean jtaCapabilities,
-            boolean generateSources, boolean allowMocking,
-            AlternativePriorities alternativePriorities) {
-        this.reflectionRegistration = reflectionRegistration;
-        this.applicationClassPredicate = applicationClassPredicate;
-        this.name = name;
-        this.output = output;
-        this.sharedAnnotationLiterals = sharedAnnotationLiterals;
-        this.generateSources = generateSources;
-        this.allowMocking = allowMocking;
+    // This predicate is used to filter annotations for InjectionPoint metadata
+    // Note that we do create annotation literals for all annotations for an injection point that resolves to a @Dependent bean that injects the InjectionPoint metadata
+    // The original use case is to ignore JDK annotations that would prevent an application built with JDK 9+ from targeting JDK 8
+    // Such as java.lang.Deprecated 
+    protected final Predicate<DotName> injectionPointAnnotationsPredicate;
+
+    private BeanProcessor(Builder builder) {
+        this.reflectionRegistration = builder.reflectionRegistration;
+        this.applicationClassPredicate = builder.applicationClassPredicate;
+        this.name = builder.name;
+        this.output = builder.output;
+        this.annotationLiterals = new AnnotationLiteralProcessor(builder.sharedAnnotationLiterals, applicationClassPredicate);
+        this.generateSources = builder.generateSources;
+        this.allowMocking = builder.allowMocking;
+        this.transformUnproxyableClasses = builder.transformUnproxyableClasses;
 
         // Initialize all build processors
         buildContext = new BuildContextImpl();
-        buildContext.putInternal(Key.INDEX.asString(), index);
+        buildContext.putInternal(Key.INDEX.asString(), builder.beanArchiveIndex);
 
-        this.beanRegistrars = initAndSort(beanRegistrars, buildContext);
-        this.observerRegistrars = initAndSort(observerRegistrars, buildContext);
-        this.contextRegistrars = initAndSort(contextRegistrars, buildContext);
-        this.beanDeploymentValidators = initAndSort(beanDeploymentValidators, buildContext);
-        this.beanDeployment = new BeanDeployment(index, additionalBeanDefiningAnnotations,
-                initAndSort(annotationTransformers, buildContext),
-                initAndSort(injectionPointsTransformers, buildContext),
-                initAndSort(observerTransformers, buildContext),
-                resourceAnnotations, buildContext,
-                unusedBeansRemovalEnabled, unusedExclusions,
-                additionalStereotypes, interceptorBindingRegistrars,
-                transformUnproxyableClasses, jtaCapabilities, alternativePriorities);
+        this.beanRegistrars = initAndSort(builder.beanRegistrars, buildContext);
+        this.observerRegistrars = initAndSort(builder.observerRegistrars, buildContext);
+        this.contextRegistrars = initAndSort(builder.contextRegistrars, buildContext);
+        this.beanDeploymentValidators = initAndSort(builder.beanDeploymentValidators, buildContext);
+        this.beanDeployment = new BeanDeployment(buildContext, builder);
+
+        // Make it configurable if we find that the set of annotations needs to grow
+        this.injectionPointAnnotationsPredicate = annotationName -> !annotationName.equals(DotNames.DEPRECATED);
     }
 
     public ContextRegistrar.RegistrationContext registerCustomContexts() {
         return beanDeployment.registerCustomContexts(contextRegistrars);
     }
 
+    public void registerScopes() {
+        beanDeployment.registerScopes();
+    }
+
     /**
      * Analyze the deployment and register all beans and observers declared on the classes. Furthermore, register all synthetic
      * beans provided by bean registrars.
-     * 
+     *
      * @return the context applied to {@link BeanRegistrar}
      */
     public BeanRegistrar.RegistrationContext registerBeans() {
@@ -128,7 +120,7 @@ public class BeanProcessor {
     }
 
     /**
-     * 
+     *
      * @param bytecodeTransformerConsumer Used to register a bytecode transformation
      */
     public void initialize(Consumer<BytecodeTransformer> bytecodeTransformerConsumer) {
@@ -136,7 +128,7 @@ public class BeanProcessor {
     }
 
     /**
-     * 
+     *
      * @param bytecodeTransformerConsumer Used to register a bytecode transformation
      * @return the validation context
      */
@@ -148,54 +140,54 @@ public class BeanProcessor {
         BeanDeployment.processErrors(validationContext.getDeploymentProblems());
     }
 
-    public List<Resource> generateResources(ReflectionRegistration reflectionRegistration) throws IOException {
+    public List<Resource> generateResources(ReflectionRegistration reflectionRegistration, Set<String> existingClasses,
+            Consumer<BytecodeTransformer> bytecodeTransformerConsumer, boolean detectUnusedFalsePositives)
+            throws IOException {
         if (reflectionRegistration == null) {
             reflectionRegistration = this.reflectionRegistration;
         }
         PrivateMembersCollector privateMembers = new PrivateMembersCollector();
-        AnnotationLiteralProcessor annotationLiterals = new AnnotationLiteralProcessor(sharedAnnotationLiterals,
-                applicationClassPredicate);
-        BeanGenerator beanGenerator = new BeanGenerator(annotationLiterals, applicationClassPredicate, privateMembers,
-                generateSources);
-        ClientProxyGenerator clientProxyGenerator = new ClientProxyGenerator(applicationClassPredicate, generateSources,
-                allowMocking);
-        InterceptorGenerator interceptorGenerator = new InterceptorGenerator(annotationLiterals, applicationClassPredicate,
-                privateMembers, generateSources);
-        SubclassGenerator subclassGenerator = new SubclassGenerator(annotationLiterals, applicationClassPredicate,
-                generateSources);
-        ObserverGenerator observerGenerator = new ObserverGenerator(annotationLiterals, applicationClassPredicate,
-                privateMembers, generateSources);
-        AnnotationLiteralGenerator annotationLiteralsGenerator = new AnnotationLiteralGenerator(generateSources);
-
         Map<BeanInfo, String> beanToGeneratedName = new HashMap<>();
         Map<ObserverInfo, String> observerToGeneratedName = new HashMap<>();
+
+        BeanGenerator beanGenerator = new BeanGenerator(annotationLiterals, applicationClassPredicate, privateMembers,
+                generateSources, reflectionRegistration, existingClasses, beanToGeneratedName,
+                injectionPointAnnotationsPredicate);
+        ClientProxyGenerator clientProxyGenerator = new ClientProxyGenerator(applicationClassPredicate, generateSources,
+                allowMocking, reflectionRegistration, existingClasses);
+        InterceptorGenerator interceptorGenerator = new InterceptorGenerator(annotationLiterals, applicationClassPredicate,
+                privateMembers, generateSources, reflectionRegistration, existingClasses, beanToGeneratedName,
+                injectionPointAnnotationsPredicate);
+        SubclassGenerator subclassGenerator = new SubclassGenerator(annotationLiterals, applicationClassPredicate,
+                generateSources, reflectionRegistration, existingClasses);
+        ObserverGenerator observerGenerator = new ObserverGenerator(annotationLiterals, applicationClassPredicate,
+                privateMembers, generateSources, reflectionRegistration, existingClasses, observerToGeneratedName,
+                injectionPointAnnotationsPredicate, allowMocking);
+        AnnotationLiteralGenerator annotationLiteralsGenerator = new AnnotationLiteralGenerator(generateSources);
 
         List<Resource> resources = new ArrayList<>();
 
         // Generate interceptors
         for (InterceptorInfo interceptor : beanDeployment.getInterceptors()) {
-            for (Resource resource : interceptorGenerator.generate(interceptor, reflectionRegistration)) {
+            for (Resource resource : interceptorGenerator.generate(interceptor)) {
                 resources.add(resource);
-                if (SpecialType.INTERCEPTOR_BEAN.equals(resource.getSpecialType())) {
-                    beanToGeneratedName.put(interceptor, resource.getName());
-                }
             }
         }
 
         // Generate beans
         for (BeanInfo bean : beanDeployment.getBeans()) {
-            for (Resource resource : beanGenerator.generate(bean, reflectionRegistration)) {
+            for (Resource resource : beanGenerator.generate(bean)) {
                 resources.add(resource);
                 if (SpecialType.BEAN.equals(resource.getSpecialType())) {
                     if (bean.getScope().isNormal()) {
                         // Generate client proxy
                         resources.addAll(
-                                clientProxyGenerator.generate(bean, resource.getFullyQualifiedName(), reflectionRegistration));
+                                clientProxyGenerator.generate(bean, resource.getFullyQualifiedName(),
+                                        bytecodeTransformerConsumer, transformUnproxyableClasses));
                     }
-                    beanToGeneratedName.put(bean, resource.getName());
                     if (bean.isSubclassRequired()) {
                         resources.addAll(
-                                subclassGenerator.generate(bean, resource.getFullyQualifiedName(), reflectionRegistration));
+                                subclassGenerator.generate(bean, resource.getFullyQualifiedName()));
                     }
                 }
             }
@@ -203,11 +195,8 @@ public class BeanProcessor {
 
         // Generate observers
         for (ObserverInfo observer : beanDeployment.getObservers()) {
-            for (Resource resource : observerGenerator.generate(observer, reflectionRegistration)) {
+            for (Resource resource : observerGenerator.generate(observer)) {
                 resources.add(resource);
-                if (SpecialType.OBSERVER.equals(resource.getSpecialType())) {
-                    observerToGeneratedName.put(observer, resource.getName());
-                }
             }
         }
 
@@ -215,13 +204,15 @@ public class BeanProcessor {
 
         // Generate _ComponentsProvider
         resources.addAll(
-                new ComponentsProviderGenerator(annotationLiterals, generateSources).generate(name, beanDeployment,
+                new ComponentsProviderGenerator(annotationLiterals, generateSources, detectUnusedFalsePositives).generate(name,
+                        beanDeployment,
                         beanToGeneratedName,
                         observerToGeneratedName));
 
         // Generate AnnotationLiterals
         if (annotationLiterals.hasLiteralsToGenerate()) {
-            resources.addAll(annotationLiteralsGenerator.generate(name, beanDeployment, annotationLiterals.getCache()));
+            resources.addAll(
+                    annotationLiteralsGenerator.generate(name, beanDeployment, annotationLiterals.getCache(), existingClasses));
         }
 
         if (output != null) {
@@ -236,6 +227,10 @@ public class BeanProcessor {
         return beanDeployment;
     }
 
+    public AnnotationLiteralProcessor getAnnotationLiteralProcessor() {
+        return annotationLiterals;
+    }
+
     public BeanDeployment process() throws IOException {
         Consumer<BytecodeTransformer> unsupportedBytecodeTransformer = new Consumer<BytecodeTransformer>() {
             @Override
@@ -244,65 +239,106 @@ public class BeanProcessor {
             }
         };
         registerCustomContexts();
+        registerScopes();
         registerBeans();
         registerSyntheticObservers();
         initialize(unsupportedBytecodeTransformer);
         ValidationContext validationContext = validate(unsupportedBytecodeTransformer);
         processValidationErrors(validationContext);
-        generateResources(null);
+        generateResources(null, new HashSet<>(), unsupportedBytecodeTransformer, true);
         return beanDeployment;
     }
 
     public static class Builder {
 
-        private String name = DEFAULT_NAME;
+        String name;
+        IndexView beanArchiveIndex;
+        IndexView applicationIndex;
+        Collection<BeanDefiningAnnotation> additionalBeanDefiningAnnotations;
+        Map<DotName, Collection<AnnotationInstance>> additionalStereotypes;
+        ResourceOutput output;
+        boolean sharedAnnotationLiterals;
+        ReflectionRegistration reflectionRegistration;
 
-        private IndexView index;
+        final List<DotName> resourceAnnotations;
+        final List<AnnotationsTransformer> annotationTransformers;
+        final List<InjectionPointsTransformer> injectionPointTransformers;
+        final List<ObserverTransformer> observerTransformers;
+        final List<BeanRegistrar> beanRegistrars;
+        final List<ObserverRegistrar> observerRegistrars;
+        final List<ContextRegistrar> contextRegistrars;
+        final List<InterceptorBindingRegistrar> additionalInterceptorBindingRegistrars;
+        final List<BeanDeploymentValidator> beanDeploymentValidators;
 
-        private Collection<BeanDefiningAnnotation> additionalBeanDefiningAnnotations = Collections.emptySet();
-        private Map<DotName, Collection<AnnotationInstance>> additionalStereotypes = Collections.emptyMap();
+        boolean removeUnusedBeans = false;
+        final List<Predicate<BeanInfo>> removalExclusions;
 
-        private ResourceOutput output;
+        boolean generateSources;
+        boolean jtaCapabilities;
+        boolean transformUnproxyableClasses;
+        boolean allowMocking;
 
-        private boolean sharedAnnotationLiterals = true;
+        AlternativePriorities alternativePriorities;
+        final List<Predicate<ClassInfo>> excludeTypes;
 
-        private ReflectionRegistration reflectionRegistration = ReflectionRegistration.NOOP;
+        Predicate<DotName> applicationClassPredicate;
 
-        private final List<DotName> resourceAnnotations = new ArrayList<>();
+        public Builder() {
+            name = DEFAULT_NAME;
+            additionalBeanDefiningAnnotations = Collections.emptySet();
+            additionalStereotypes = Collections.emptyMap();
+            sharedAnnotationLiterals = true;
+            reflectionRegistration = ReflectionRegistration.NOOP;
+            resourceAnnotations = new ArrayList<>();
+            annotationTransformers = new ArrayList<>();
+            injectionPointTransformers = new ArrayList<>();
+            observerTransformers = new ArrayList<>();
+            beanRegistrars = new ArrayList<>();
+            observerRegistrars = new ArrayList<>();
+            contextRegistrars = new ArrayList<>();
+            additionalInterceptorBindingRegistrars = new ArrayList<>();
+            beanDeploymentValidators = new ArrayList<>();
 
-        private final List<AnnotationsTransformer> annotationTransformers = new ArrayList<>();
-        private final List<InjectionPointsTransformer> injectionPointTransformers = new ArrayList<>();
-        private final List<ObserverTransformer> observerTransformers = new ArrayList<>();
-        private final List<BeanRegistrar> beanRegistrars = new ArrayList<>();
-        private final List<ObserverRegistrar> observerRegistrars = new ArrayList<>();
-        private final List<ContextRegistrar> contextRegistrars = new ArrayList<>();
-        private final List<InterceptorBindingRegistrar> additionalInterceptorBindingRegistrars = new ArrayList<>();
-        private final List<BeanDeploymentValidator> beanDeploymentValidators = new ArrayList<>();
+            removeUnusedBeans = false;
+            removalExclusions = new ArrayList<>();
 
-        private boolean removeUnusedBeans = false;
-        private final List<Predicate<BeanInfo>> removalExclusions = new ArrayList<>();
+            generateSources = false;
+            jtaCapabilities = false;
+            transformUnproxyableClasses = false;
+            allowMocking = false;
 
-        private boolean generateSources = false;
-        private boolean jtaCapabilities = false;
-        private boolean transformUnproxyableClasses = false;
-        private boolean allowMocking = false;
+            excludeTypes = new ArrayList<>();
 
-        private AlternativePriorities alternativePriorities;
-
-        private Predicate<DotName> applicationClassPredicate = new Predicate<DotName>() {
-            @Override
-            public boolean test(DotName dotName) {
-                return true;
-            }
-        };
+            applicationClassPredicate = dn -> true;
+        }
 
         public Builder setName(String name) {
             this.name = name;
             return this;
         }
 
-        public Builder setIndex(IndexView index) {
-            this.index = index;
+        /**
+         * Set the bean archive index. This index is mandatory and is used to discover components (beans, interceptors,
+         * qualifiers, etc.) and during type-safe resolution.
+         * 
+         * @param beanArchiveIndex
+         * @return self
+         */
+        public Builder setBeanArchiveIndex(IndexView beanArchiveIndex) {
+            this.beanArchiveIndex = beanArchiveIndex;
+            return this;
+        }
+
+        /**
+         * Set the application index. This index is optional and is also used to discover types during type-safe resolution.
+         * <p>
+         * Some types may not be part of the bean archive index but are still needed during type-safe resolution.
+         * 
+         * @param applicationIndex
+         * @return self
+         */
+        public Builder setApplicationIndex(IndexView applicationIndex) {
+            this.applicationIndex = applicationIndex;
             return this;
         }
 
@@ -428,7 +464,7 @@ public class BeanProcessor {
 
         /**
          * If set to true the container will transform unproxyable bean classes during validation.
-         * 
+         *
          * @param value
          * @return self
          */
@@ -440,7 +476,7 @@ public class BeanProcessor {
         /**
          * If set to true the will generate source files of all generated classes for debug purposes. The generated source is
          * not actually a source file but a textual representation of generated code.
-         * 
+         *
          * @param value
          * @return self
          */
@@ -453,7 +489,7 @@ public class BeanProcessor {
          * Can be used to compute a priority of an alternative bean. A non-null computed value always
          * takes precedence over the priority defined by {@link Priority}, {@link AlternativePriority} or an alternative
          * stereotype.
-         * 
+         *
          * @param priorities
          * @return self
          */
@@ -462,18 +498,24 @@ public class BeanProcessor {
             return this;
         }
 
+        /**
+         * Specify the types that should be excluded from discovery.
+         * 
+         * @param predicate
+         * @return self
+         */
+        public Builder addExcludeType(Predicate<ClassInfo> predicate) {
+            this.excludeTypes.add(predicate);
+            return this;
+        }
+
         public BeanProcessor build() {
-            return new BeanProcessor(name, index, additionalBeanDefiningAnnotations, output, sharedAnnotationLiterals,
-                    reflectionRegistration, annotationTransformers, injectionPointTransformers, observerTransformers,
-                    resourceAnnotations, beanRegistrars, observerRegistrars, contextRegistrars, beanDeploymentValidators,
-                    applicationClassPredicate, removeUnusedBeans, removalExclusions, additionalStereotypes,
-                    additionalInterceptorBindingRegistrars, transformUnproxyableClasses, jtaCapabilities, generateSources,
-                    allowMocking, alternativePriorities);
+            return new BeanProcessor(this);
         }
 
     }
 
-    private static <E extends BuildExtension> List<E> initAndSort(List<E> extensions, BuildContext buildContext) {
+    static <E extends BuildExtension> List<E> initAndSort(List<E> extensions, BuildContext buildContext) {
         for (Iterator<E> iterator = extensions.iterator(); iterator.hasNext();) {
             if (!iterator.next().initialize(buildContext)) {
                 iterator.remove();

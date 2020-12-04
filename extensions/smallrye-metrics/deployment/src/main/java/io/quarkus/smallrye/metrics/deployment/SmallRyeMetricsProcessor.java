@@ -53,7 +53,8 @@ import io.quarkus.arc.processor.AnnotationsTransformer;
 import io.quarkus.arc.processor.BuildExtension;
 import io.quarkus.arc.processor.BuiltinScope;
 import io.quarkus.arc.processor.DotNames;
-import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.Record;
@@ -64,11 +65,15 @@ import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveMethodBuildItem;
 import io.quarkus.deployment.logging.LogCleanupFilterBuildItem;
+import io.quarkus.deployment.metrics.MetricsCapabilityBuildItem;
+import io.quarkus.deployment.metrics.MetricsFactoryConsumerBuildItem;
 import io.quarkus.runtime.annotations.ConfigItem;
 import io.quarkus.runtime.annotations.ConfigRoot;
+import io.quarkus.runtime.metrics.MetricsFactory;
 import io.quarkus.smallrye.metrics.deployment.jandex.JandexBeanInfoAdapter;
 import io.quarkus.smallrye.metrics.deployment.jandex.JandexMemberInfoAdapter;
 import io.quarkus.smallrye.metrics.deployment.spi.MetricBuildItem;
+import io.quarkus.smallrye.metrics.deployment.spi.MetricsConfigurationBuildItem;
 import io.quarkus.smallrye.metrics.runtime.MetadataHolder;
 import io.quarkus.smallrye.metrics.runtime.SmallRyeMetricsRecorder;
 import io.quarkus.smallrye.metrics.runtime.TagHolder;
@@ -92,7 +97,7 @@ import io.vertx.ext.web.Route;
 import io.vertx.ext.web.Router;
 
 public class SmallRyeMetricsProcessor {
-    private static final Logger LOGGER = Logger.getLogger("io.quarkus.smallrye.metrics.deployment.SmallRyeMetricsProcessor");
+    static final Logger LOGGER = Logger.getLogger("io.quarkus.smallrye.metrics.deployment.SmallRyeMetricsProcessor");
 
     @ConfigRoot(name = "smallrye-metrics")
     static final class SmallRyeMetricsConfig {
@@ -115,12 +120,35 @@ public class SmallRyeMetricsProcessor {
          * The use case is to facilitate migration from Micrometer-based metrics, because original dashboards for JVM metrics
          * will continue working without having to rewrite them.
          */
-        @ConfigItem(name = "micrometer.compatibility", defaultValue = "false")
+        @ConfigItem(name = "micrometer.compatibility")
         public boolean micrometerCompatibility;
 
+        /**
+         * Whether or not detailed JAX-RS metrics should be enabled.
+         *
+         * See <a href=
+         * "https://github.com/eclipse/microprofile-metrics/blob/2.3.x/spec/src/main/asciidoc/required-metrics.adoc#optional-rest">MicroProfile
+         * Metrics: Optional REST metrics</a>.
+         */
+        @ConfigItem(name = "jaxrs.enabled", defaultValue = "false")
+        public boolean jaxrsEnabled;
     }
 
     SmallRyeMetricsConfig metrics;
+
+    @BuildStep
+    MetricsConfigurationBuildItem metricsConfigurationBuildItem() {
+        return new MetricsConfigurationBuildItem(metrics.path);
+    }
+
+    @BuildStep
+    MetricsCapabilityBuildItem metricsCapabilityBuildItem() {
+        if (metrics.extensionsEnabled) {
+            return new MetricsCapabilityBuildItem(x -> MetricsFactory.MP_METRICS.equals(x),
+                    metrics.path);
+        }
+        return null;
+    }
 
     @BuildStep
     @Record(STATIC_INIT)
@@ -262,12 +290,12 @@ public class SmallRyeMetricsProcessor {
 
     @BuildStep
     public CapabilityBuildItem capability() {
-        return new CapabilityBuildItem(Capabilities.METRICS);
+        return new CapabilityBuildItem(Capability.METRICS);
     }
 
     @BuildStep
     public FeatureBuildItem feature() {
-        return new FeatureBuildItem(FeatureBuildItem.SMALLRYE_METRICS);
+        return new FeatureBuildItem(Feature.SMALLRYE_METRICS);
     }
 
     @BuildStep
@@ -344,7 +372,14 @@ public class SmallRyeMetricsProcessor {
                     case METHOD:
                         MethodInfo method = metricAnnotationTarget.asMethod();
                         if (!method.declaringClass().name().toString().startsWith("io.smallrye.metrics")) {
-                            collectedMetricsMethods.add(method);
+                            if (!Modifier.isPrivate(method.flags())) {
+                                collectedMetricsMethods.add(method);
+                            } else {
+                                LOGGER.warn("Private method is annotated with a metric: " + method +
+                                        " in class " + method.declaringClass().name() + ". Metrics " +
+                                        "are not collected for private methods. To enable metrics for this method, make " +
+                                        "it at least package-private.");
+                            }
                         }
                         break;
                     case CLASS:
@@ -362,17 +397,22 @@ public class SmallRyeMetricsProcessor {
         for (ClassInfo clazz : collectedMetricsClasses.values()) {
             BeanInfo beanInfo = beanInfoAdapter.convert(clazz);
             ClassInfo superclass = clazz;
+            Set<String> alreadyRegisteredNames = new HashSet<>();
             // register metrics for all inherited methods as well
             while (superclass != null && superclass.superName() != null) {
                 for (MethodInfo method : superclass.methods()) {
-                    // if we're looking at a superclass, skip methods that are overridden by the subclass
-                    if (superclass != clazz) {
-                        if (clazz.method(method.name(), method.parameters().toArray(new Type[] {})) != null) {
-                            continue;
-                        }
-                    }
-                    if (!Modifier.isPrivate(method.flags())) {
+                    if (!Modifier.isPrivate(method.flags()) && !alreadyRegisteredNames.contains(method.name())) {
                         metrics.registerMetrics(beanInfo, memberInfoAdapter.convert(method));
+                        alreadyRegisteredNames.add(method.name());
+                    }
+                }
+                // find inherited default methods which are not overridden by the original bean
+                for (Type interfaceType : superclass.interfaceTypes()) {
+                    ClassInfo ifaceInfo = beanArchiveIndex.getIndex().getClassByName(interfaceType.name());
+                    if (ifaceInfo != null) {
+                        findNonOverriddenDefaultMethods(ifaceInfo, alreadyRegisteredNames, metrics, beanArchiveIndex,
+                                memberInfoAdapter,
+                                beanInfo);
                     }
                 }
                 superclass = index.getClassByName(superclass.superName());
@@ -384,6 +424,30 @@ public class SmallRyeMetricsProcessor {
             if (!collectedMetricsClasses.containsKey(declaringClazz.name())) {
                 BeanInfo beanInfo = beanInfoAdapter.convert(declaringClazz);
                 metrics.registerMetrics(beanInfo, memberInfoAdapter.convert(method));
+            }
+        }
+    }
+
+    private void findNonOverriddenDefaultMethods(ClassInfo interfaceInfo, Set<String> alreadyRegisteredNames,
+            SmallRyeMetricsRecorder recorder,
+            BeanArchiveIndexBuildItem beanArchiveIndex, JandexMemberInfoAdapter memberInfoAdapter, BeanInfo beanInfo) {
+        // Check for default methods which are NOT overridden by the bean that we are registering metrics for
+        // or any of its superclasses. Register a metric for each of them.
+        for (MethodInfo method : interfaceInfo.methods()) {
+            if (!Modifier.isAbstract(method.flags())) { // only take default methods
+                if (!alreadyRegisteredNames.contains(method.name())) {
+                    recorder.registerMetrics(beanInfo, memberInfoAdapter.convert(method));
+                    alreadyRegisteredNames.add(method.name());
+                }
+            }
+        }
+        // recursively repeat the same for interfaces which this interface extends
+        for (Type extendedInterface : interfaceInfo.interfaceTypes()) {
+            ClassInfo extendedInterfaceInfo = beanArchiveIndex.getIndex().getClassByName(extendedInterface.name());
+            if (extendedInterfaceInfo != null) {
+                findNonOverriddenDefaultMethods(extendedInterfaceInfo, alreadyRegisteredNames, recorder, beanArchiveIndex,
+                        memberInfoAdapter,
+                        beanInfo);
             }
         }
     }
@@ -409,8 +473,9 @@ public class SmallRyeMetricsProcessor {
 
     @BuildStep
     @Record(RUNTIME_INIT)
-    void registerMetricsFromProducers(
+    void registerRuntimeExtensionMetrics(
             SmallRyeMetricsRecorder recorder,
+            List<MetricsFactoryConsumerBuildItem> metricsFactoryConsumerBuildItems,
             ValidationPhaseBuildItem validationPhase,
             BeanArchiveIndexBuildItem beanArchiveIndex) {
         IndexView index = beanArchiveIndex.getIndex();
@@ -452,6 +517,11 @@ public class SmallRyeMetricsProcessor {
                 }
             }
         }
+        for (MetricsFactoryConsumerBuildItem item : metricsFactoryConsumerBuildItems) {
+            if (item.executionTime() == RUNTIME_INIT) {
+                recorder.registerMetrics(item.getConsumer());
+            }
+        }
     }
 
     /**
@@ -461,6 +531,7 @@ public class SmallRyeMetricsProcessor {
     @Record(STATIC_INIT)
     void extensionMetrics(SmallRyeMetricsRecorder recorder,
             List<MetricBuildItem> additionalMetrics,
+            List<MetricsFactoryConsumerBuildItem> metricsFactoryConsumerBuildItems,
             BuildProducer<UnremovableBeanBuildItem> unremovableBeans) {
         if (metrics.extensionsEnabled) {
             if (!additionalMetrics.isEmpty()) {
@@ -478,6 +549,12 @@ public class SmallRyeMetricsProcessor {
                             MetadataHolder.from(additionalMetric.getMetadata()),
                             tags,
                             additionalMetric.getImplementor());
+                }
+            }
+
+            for (MetricsFactoryConsumerBuildItem item : metricsFactoryConsumerBuildItems) {
+                if (item.executionTime() == STATIC_INIT) {
+                    recorder.registerMetrics(item.getConsumer());
                 }
             }
         }

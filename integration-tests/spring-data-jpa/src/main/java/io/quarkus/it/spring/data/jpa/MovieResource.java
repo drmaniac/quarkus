@@ -122,4 +122,22 @@ public class MovieResource {
 
         return list;
     }
+
+    @GET
+    @Path("/ratings")
+    @Produces("application/json")
+    public List<String> findAllRatings() {
+        return movieRepository.findAllRatings();
+    }
+
+    @Path("/new/{id}/{title}")
+    @GET
+    @Produces("application/json")
+    public Movie newPerson(@PathParam("id") Long id, @PathParam("title") String title) {
+        Movie movie = new Movie(id, title, null, -1);
+        movie = movieRepository.save(movie);
+
+        movie.setDuration(1000);
+        return movieRepository.save(movie);
+    }
 }

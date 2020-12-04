@@ -12,6 +12,7 @@ import org.apache.maven.artifact.Artifact;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
+import org.apache.maven.plugin.logging.Log;
 import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
@@ -176,10 +177,6 @@ public class NativeImageMojo extends AbstractMojo {
     @Parameter(defaultValue = "${project.remoteProjectRepositories}", readonly = true, required = true)
     private List<RemoteRepository> repos;
 
-    public NativeImageMojo() {
-        MojoLogger.logSupplier = this::getLog;
-    }
-
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
 
@@ -279,8 +276,7 @@ public class NativeImageMojo extends AbstractMojo {
                     .build();
             appCoords.setPath(resolver.resolve(appMvnArtifact).getArtifact().getFile().toPath());
 
-            try (CuratedApplication curatedApplication = QuarkusBootstrap.builder(appCoords.getPaths().getSinglePath())
-                    .setProjectRoot(project.getBasedir().toPath())
+            try (CuratedApplication curatedApplication = QuarkusBootstrap.builder()
                     .setBuildSystemProperties(realProperties)
                     .setAppArtifact(appCoords)
                     .setBaseName(finalName)
@@ -317,6 +313,10 @@ public class NativeImageMojo extends AbstractMojo {
             configs.put("quarkus.native.add-all-charsets", addAllCharsets.toString());
         }
         if (additionalBuildArgs != null && !additionalBuildArgs.isEmpty()) {
+            getLog().warn("Your application is setting the deprecated 'additionalBuildArgs' Maven option."
+                    + " This option overrides any value passed to the 'quarkus.native.additional-build-args'"
+                    + " property and will be removed in the future."
+                    + " Please consider using 'quarkus.native.additional-build-args' instead of 'additionalBuildArgs'.");
             configs.put("quarkus.native.additional-build-args",
                     additionalBuildArgs.stream()
                             .map(val -> val.replace("\\", "\\\\"))
@@ -410,6 +410,12 @@ public class NativeImageMojo extends AbstractMojo {
         }
         return configs;
 
+    }
+
+    @Override
+    public void setLog(Log log) {
+        super.setLog(log);
+        MojoLogger.delegate = log;
     }
 
 }

@@ -1,6 +1,5 @@
 package io.quarkus.arc.impl;
 
-import io.quarkus.arc.InjectableBean;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -34,17 +33,13 @@ public final class Qualifiers {
         }
     }
 
-    static boolean hasQualifiers(InjectableBean<?> bean, Annotation... requiredQualifiers) {
+    static boolean hasQualifiers(Set<Annotation> beanQualifiers, Annotation... requiredQualifiers) {
         for (Annotation qualifier : requiredQualifiers) {
-            if (!hasQualifier(bean, qualifier)) {
+            if (!hasQualifier(beanQualifiers, qualifier)) {
                 return false;
             }
         }
         return true;
-    }
-
-    static boolean hasQualifier(InjectableBean<?> bean, Annotation requiredQualifier) {
-        return hasQualifier(bean.getQualifiers(), requiredQualifier);
     }
 
     static boolean hasQualifier(Iterable<Annotation> qualifiers, Annotation requiredQualifier) {
@@ -94,7 +89,7 @@ public final class Qualifiers {
         Set<Annotation> qualifiers = new HashSet<>();
         qualifiers.add(Default.Literal.INSTANCE);
         qualifiers.add(Any.Literal.INSTANCE);
-        return qualifiers;
+        return Collections.unmodifiableSet(qualifiers);
     }
 
     private static Object invoke(Method method, Object instance) {

@@ -19,29 +19,31 @@ import com.mysql.cj.jdbc.ha.ReplicationConnection;
 import com.mysql.cj.jdbc.result.ResultSetInternalMethods;
 import com.mysql.cj.protocol.Resultset;
 
-import io.quarkus.agroal.deployment.JdbcDriverBuildItem;
+import io.quarkus.agroal.spi.JdbcDriverBuildItem;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.processor.BuiltinScope;
 import io.quarkus.datasource.common.runtime.DatabaseKind;
 import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
+import io.quarkus.deployment.Feature;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
-import io.quarkus.deployment.annotations.ExecutionTime;
-import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.NativeImageEnableAllCharsetsBuildItem;
 import io.quarkus.deployment.builditem.NativeImageEnableAllTimeZonesBuildItem;
 import io.quarkus.deployment.builditem.SslNativeConfigBuildItem;
+import io.quarkus.deployment.builditem.SystemPropertyBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageProxyDefinitionBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.NativeImageSystemPropertyBuildItem;
+import io.quarkus.deployment.pkg.steps.NativeBuild;
 import io.quarkus.jdbc.mysql.runtime.MySQLAgroalConnectionConfigurer;
-import io.quarkus.jdbc.mysql.runtime.MySQLRecorder;
 
 public class JDBCMySQLProcessor {
 
     @BuildStep
     FeatureBuildItem feature() {
-        return new FeatureBuildItem(FeatureBuildItem.JDBC_MYSQL);
+        return new FeatureBuildItem(Feature.JDBC_MYSQL);
     }
 
     @BuildStep
@@ -54,18 +56,12 @@ public class JDBCMySQLProcessor {
     @BuildStep
     void configureAgroalConnection(BuildProducer<AdditionalBeanBuildItem> additionalBeans,
             Capabilities capabilities) {
-        if (capabilities.isCapabilityPresent(Capabilities.AGROAL)) {
+        if (capabilities.isPresent(Capability.AGROAL)) {
             additionalBeans.produce(new AdditionalBeanBuildItem.Builder().addBeanClass(MySQLAgroalConnectionConfigurer.class)
                     .setDefaultScope(BuiltinScope.APPLICATION.getName())
                     .setUnremovable()
                     .build());
         }
-    }
-
-    @BuildStep
-    @Record(ExecutionTime.RUNTIME_INIT)
-    void abandonedConnectionCleanUp(MySQLRecorder recorder) {
-        recorder.startAbandonedConnectionCleanup();
     }
 
     @BuildStep
@@ -81,6 +77,16 @@ public class JDBCMySQLProcessor {
     @BuildStep
     NativeImageEnableAllTimeZonesBuildItem enableAllTimeZones() {
         return new NativeImageEnableAllTimeZonesBuildItem();
+    }
+
+    @BuildStep
+    NativeImageSystemPropertyBuildItem disableAbandonedConnectionCleanUpInNativeMode() {
+        return new NativeImageSystemPropertyBuildItem("com.mysql.cj.disableAbandonedConnectionCleanup", "true");
+    }
+
+    @BuildStep(onlyIfNot = NativeBuild.class)
+    SystemPropertyBuildItem disableAbandonedConnectionCleanUpInJVMMode() {
+        return new SystemPropertyBuildItem("com.mysql.cj.disableAbandonedConnectionCleanup", "true");
     }
 
     @BuildStep

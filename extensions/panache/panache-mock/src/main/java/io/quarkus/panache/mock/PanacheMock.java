@@ -12,6 +12,7 @@ import org.mockito.internal.invocation.RealMethod;
 import org.mockito.internal.util.MockUtil;
 import org.mockito.invocation.MockHandler;
 import org.mockito.mock.MockCreationSettings;
+import org.mockito.stubbing.Answer;
 import org.mockito.verification.VerificationMode;
 
 public class PanacheMock {
@@ -21,11 +22,11 @@ public class PanacheMock {
     private final static Map<Class<?>, Object> mocks = new ConcurrentHashMap<>();
 
     @SuppressWarnings("unchecked")
-    public static <T> T getMock(Class<T> klass) {
+    public static synchronized <T> T getMock(Class<T> klass) {
         return (T) mocks.get(klass);
     }
 
-    public static Object[] getMocks(Class<?>... classes) {
+    public static synchronized Object[] getMocks(Class<?>... classes) {
         Object[] mocks = new Object[classes.length];
         for (int i = 0; i < classes.length; i++) {
             mocks[i] = getMock(classes[i]);
@@ -33,19 +34,19 @@ public class PanacheMock {
         return mocks;
     }
 
-    public static void mock(Class<?>... classes) {
+    public static synchronized void mock(Class<?>... classes) {
         for (Class<?> klass : classes) {
             mocks.computeIfAbsent(klass, v -> Mockito.mock(klass));
         }
         IsMockEnabled = !mocks.isEmpty();
     }
 
-    public static void reset() {
+    public static synchronized void reset() {
         mocks.clear();
         IsMockEnabled = false;
     }
 
-    public static boolean isMocked(Class<?> klass) {
+    public static synchronized boolean isMocked(Class<?> klass) {
         return mocks.containsKey(klass);
     }
 
@@ -107,4 +108,35 @@ public class PanacheMock {
 
     }
 
+    public static PanacheStubber doAnswer(Answer answer) {
+        return new PanacheStubber(Mockito.doAnswer(answer));
+    }
+
+    public static PanacheStubber doCallRealMethod() {
+        return new PanacheStubber(Mockito.doCallRealMethod());
+    }
+
+    public static PanacheStubber doNothing() {
+        return new PanacheStubber(Mockito.doNothing());
+    }
+
+    public static PanacheStubber doReturn(Object objectToBeReturned) {
+        return new PanacheStubber(Mockito.doReturn(objectToBeReturned));
+    }
+
+    public static PanacheStubber doReturn(Object objectToBeReturned, Object... toBeReturnedNext) {
+        return new PanacheStubber(Mockito.doReturn(objectToBeReturned, toBeReturnedNext));
+    }
+
+    public static PanacheStubber doThrow(Class<? extends Throwable> toBeThrown) {
+        return new PanacheStubber(Mockito.doThrow(toBeThrown));
+    }
+
+    public static PanacheStubber doThrow(Class<? extends Throwable> toBeThrown, Class<? extends Throwable>... toBeThrownNext) {
+        return new PanacheStubber(Mockito.doThrow(toBeThrown, toBeThrownNext));
+    }
+
+    public static PanacheStubber doThrow(Throwable... toBeThrown) {
+        return new PanacheStubber(Mockito.doThrow(toBeThrown));
+    }
 }

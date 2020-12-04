@@ -19,6 +19,7 @@ import javax.tools.StandardJavaFileManager;
 import javax.tools.StandardLocation;
 import javax.tools.ToolProvider;
 
+import org.jboss.logging.Logger;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 
@@ -26,10 +27,16 @@ import io.quarkus.gizmo.Gizmo;
 
 public class JavaCompilationProvider implements CompilationProvider {
 
+    private static final Logger log = Logger.getLogger(JavaCompilationProvider.class);
+
     // -g is used to make the java compiler generate all debugging info
     // -parameters is used to generate metadata for reflection on method parameters
     // this is useful when people using debuggers against their hot-reloaded app
     private static final Set<String> COMPILER_OPTIONS = new HashSet<>(Arrays.asList("-g", "-parameters"));
+
+    JavaCompiler compiler;
+    StandardJavaFileManager fileManager;
+    DiagnosticCollector<JavaFileObject> fileManagerDiagnostics;
 
     @Override
     public Set<String> handledExtensions() {
@@ -38,14 +45,20 @@ public class JavaCompilationProvider implements CompilationProvider {
 
     @Override
     public void compile(Set<File> filesToCompile, Context context) {
-        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        JavaCompiler compiler = this.compiler;
+        if (compiler == null) {
+            compiler = this.compiler = ToolProvider.getSystemJavaCompiler();
+        }
         if (compiler == null) {
             throw new RuntimeException("No system java compiler provided");
         }
-        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-        try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, null,
-                context.getSourceEncoding())) {
+        try {
+            if (fileManager == null) {
+                fileManager = compiler.getStandardFileManager(fileManagerDiagnostics = new DiagnosticCollector<>(), null,
+                        context.getSourceEncoding());
+            }
 
+            DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
             fileManager.setLocation(StandardLocation.CLASS_PATH, context.getClasspath());
             fileManager.setLocation(StandardLocation.CLASS_OUTPUT, Collections.singleton(context.getOutputDirectory()));
 
@@ -61,8 +74,19 @@ public class JavaCompilationProvider implements CompilationProvider {
             }
 
             for (Diagnostic<? extends JavaFileObject> diagnostic : diagnostics.getDiagnostics()) {
-                System.out.format("%s, line %d in %s", diagnostic.getMessage(null), diagnostic.getLineNumber(),
+                log.logf(diagnostic.getKind() == Diagnostic.Kind.ERROR ? Logger.Level.ERROR : Logger.Level.WARN,
+                        "%s, line %d in %s", diagnostic.getMessage(null), diagnostic.getLineNumber(),
                         diagnostic.getSource() == null ? "[unknown source]" : diagnostic.getSource().getName());
+            }
+            if (!fileManagerDiagnostics.getDiagnostics().isEmpty()) {
+                for (Diagnostic<? extends JavaFileObject> diagnostic : fileManagerDiagnostics.getDiagnostics()) {
+                    log.logf(diagnostic.getKind() == Diagnostic.Kind.ERROR ? Logger.Level.ERROR : Logger.Level.WARN,
+                            "%s, line %d in %s", diagnostic.getMessage(null), diagnostic.getLineNumber(),
+                            diagnostic.getSource() == null ? "[unknown source]" : diagnostic.getSource().getName());
+                }
+                fileManager.close();
+                fileManagerDiagnostics = null;
+                fileManager = null;
             }
         } catch (IOException e) {
             throw new RuntimeException("Cannot close file manager", e);
@@ -81,6 +105,15 @@ public class JavaCompilationProvider implements CompilationProvider {
             throw new RuntimeException(e);
         }
         return sourceFilePath;
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (fileManager != null) {
+            fileManager.close();
+            fileManager = null;
+            fileManagerDiagnostics = null;
+        }
     }
 
     static class RuntimeUpdatesClassVisitor extends ClassVisitor {
