@@ -19,6 +19,12 @@ public class ElasticsearchOperations {
         elasticsearchIndex.persist(entity);
     }
 
+    public static void update(final PanacheElasticsearchEntityBase entity) {
+        LOGGER.info("persist: " + entity.toString());
+        final ElasticsearchIndex elasticsearchIndex = elasticsearchIndex(entity);
+        elasticsearchIndex.update(entity);
+    }
+
     public static Object findById(Class<?> entityClass, String id) {
         final ElasticsearchIndex elasticsearchIndex = elasticsearchIndex(entityClass);
         return elasticsearchIndex.findById(entityClass, id);

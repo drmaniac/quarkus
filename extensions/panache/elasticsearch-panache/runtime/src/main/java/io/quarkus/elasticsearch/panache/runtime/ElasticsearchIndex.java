@@ -53,6 +53,12 @@ public class ElasticsearchIndex {
         }
     }
 
+    public Object update(final PanacheElasticsearchEntityBase entity) {
+        log.info("update entity in index (" + indexName + ")");
+        log.error("Not Implemented for now");
+        throw new UnsupportedOperationException("Not implemented, yes");
+    }
+
     public Object findById(final Class<?> entityClass, final String id) {
 
         try {

@@ -3,7 +3,6 @@ package io.quarkus.elasticsearch.panache;
 import java.util.stream.Stream;
 
 import io.quarkus.elasticsearch.panache.runtime.ElasticsearchOperations;
-import io.quarkus.mongodb.panache.runtime.MongoOperations;
 import io.quarkus.panache.common.impl.GenerateBridge;
 
 /**
@@ -29,7 +28,7 @@ public abstract class PanacheElasticsearchEntityBase {
     public void persist() {
         ElasticsearchOperations.persist(this);
     }
-    
+
     /**
      * Update this entity in the database.
      *
@@ -38,7 +37,7 @@ public abstract class PanacheElasticsearchEntityBase {
      * @see #update(Object, Object...)
      */
     public void update() {
-      ElasticsearchOperations.update(this);
+        ElasticsearchOperations.update(this);
     }
 
     /**

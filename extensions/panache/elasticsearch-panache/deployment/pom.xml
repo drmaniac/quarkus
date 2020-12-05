@@ -39,6 +39,10 @@
             <artifactId>quarkus-elasticsearch-rest-client-deployment</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-elasticsearch-rest-client-common-deployment</artifactId>
+        </dependency>
+        <dependency>
           <groupId>io.quarkus</groupId>
           <artifactId>quarkus-arc-deployment</artifactId>
         </dependency>
