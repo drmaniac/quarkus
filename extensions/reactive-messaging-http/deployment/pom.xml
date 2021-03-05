@@ -58,7 +58,7 @@
 
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-undertow-websockets-deployment</artifactId>
+            <artifactId>quarkus-websockets-deployment</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -70,14 +70,6 @@
 
     <build>
         <plugins>
-            <plugin>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <configuration>
-                    <systemProperties>
-                        <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
-                    </systemProperties>
-                </configuration>
-            </plugin>
             <plugin>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>

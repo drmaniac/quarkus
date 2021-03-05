@@ -3,6 +3,7 @@ package io.quarkus.hibernate.orm.runtime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import javax.persistence.EntityManagerFactory;
 import javax.persistence.PersistenceException;
@@ -19,15 +20,18 @@ import org.hibernate.service.internal.ProvidedService;
 import org.jboss.logging.Logger;
 
 import io.quarkus.agroal.DataSource.DataSourceLiteral;
+import io.quarkus.agroal.runtime.UnconfiguredDataSource;
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.InstanceHandle;
 import io.quarkus.datasource.common.runtime.DataSourceUtil;
 import io.quarkus.hibernate.orm.runtime.RuntimeSettings.Builder;
 import io.quarkus.hibernate.orm.runtime.boot.FastBootEntityManagerFactoryBuilder;
 import io.quarkus.hibernate.orm.runtime.boot.registry.PreconfiguredServiceRegistryBuilder;
-import io.quarkus.hibernate.orm.runtime.integration.HibernateOrmIntegrations;
+import io.quarkus.hibernate.orm.runtime.integration.HibernateOrmIntegrationRuntimeDescriptor;
+import io.quarkus.hibernate.orm.runtime.integration.HibernateOrmIntegrationRuntimeInitListener;
 import io.quarkus.hibernate.orm.runtime.recording.PrevalidatedQuarkusMetadata;
 import io.quarkus.hibernate.orm.runtime.recording.RecordedState;
+import io.quarkus.runtime.configuration.ConfigurationException;
 
 /**
  * This can not inherit from HibernatePersistenceProvider as that would force
@@ -42,9 +46,12 @@ public final class FastBootHibernatePersistenceProvider implements PersistencePr
     private final ProviderUtil providerUtil = new ProviderUtil();
 
     private final HibernateOrmRuntimeConfig hibernateOrmRuntimeConfig;
+    private final Map<String, List<HibernateOrmIntegrationRuntimeDescriptor>> integrationRuntimeDescriptors;
 
-    public FastBootHibernatePersistenceProvider(HibernateOrmRuntimeConfig hibernateOrmRuntimeConfig) {
+    public FastBootHibernatePersistenceProvider(HibernateOrmRuntimeConfig hibernateOrmRuntimeConfig,
+            Map<String, List<HibernateOrmIntegrationRuntimeDescriptor>> integrationRuntimeDescriptors) {
         this.hibernateOrmRuntimeConfig = hibernateOrmRuntimeConfig;
+        this.integrationRuntimeDescriptors = integrationRuntimeDescriptors;
     }
 
     @SuppressWarnings("rawtypes")
@@ -173,7 +180,13 @@ public final class FastBootHibernatePersistenceProvider implements PersistencePr
                 injectRuntimeConfiguration(persistenceUnitName, hibernateOrmRuntimeConfig, runtimeSettingsBuilder);
             }
 
-            HibernateOrmIntegrations.contributeRuntimeProperties((k, v) -> runtimeSettingsBuilder.put(k, v));
+            for (HibernateOrmIntegrationRuntimeDescriptor descriptor : integrationRuntimeDescriptors
+                    .getOrDefault(persistenceUnitName, Collections.emptyList())) {
+                Optional<HibernateOrmIntegrationRuntimeInitListener> listenerOptional = descriptor.getInitListener();
+                if (listenerOptional.isPresent()) {
+                    listenerOptional.get().contributeRuntimeProperties(runtimeSettingsBuilder::put);
+                }
+            }
 
             // Allow detection of driver/database capabilities on runtime init (was disabled during static init)
             runtimeSettingsBuilder.put("hibernate.temp.use_jdbc_metadata_defaults", "true");
@@ -296,7 +309,14 @@ public final class FastBootHibernatePersistenceProvider implements PersistencePr
                     "No datasource " + dataSource + " has been defined for persistence unit " + persistenceUnitName);
         }
 
-        runtimeSettingsBuilder.put(AvailableSettings.DATASOURCE, dataSourceHandle.get());
+        DataSource ds = dataSourceHandle.get();
+        if (ds instanceof UnconfiguredDataSource) {
+            throw new ConfigurationException(
+                    "Model classes are defined for the default persistence unit " + persistenceUnitName
+                            + " but configured datasource " + dataSource
+                            + " not found: the default EntityManagerFactory will not be created. To solve this, configure the default datasource. Refer to https://quarkus.io/guides/datasource for guidance.");
+        }
+        runtimeSettingsBuilder.put(AvailableSettings.DATASOURCE, ds);
     }
 
     private static void injectRuntimeConfiguration(String persistenceUnitName,

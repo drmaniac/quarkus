@@ -25,7 +25,6 @@ import javax.ws.rs.core.UriInfo;
 import javax.ws.rs.ext.ReaderInterceptor;
 import javax.ws.rs.ext.WriterInterceptor;
 import org.jboss.resteasy.reactive.common.core.AbstractResteasyReactiveContext;
-import org.jboss.resteasy.reactive.common.util.EmptyInputStream;
 import org.jboss.resteasy.reactive.common.util.Encode;
 import org.jboss.resteasy.reactive.common.util.PathSegmentImpl;
 import org.jboss.resteasy.reactive.server.core.serialization.EntityWriter;
@@ -59,6 +58,11 @@ public abstract class ResteasyReactiveRequestContext
      */
     private Object[] parameters;
     private RuntimeResource target;
+
+    /**
+     * info about path params and other data about previously matched sub resource locators
+     */
+    private PreviousResource previousResource;
 
     /**
      * The parameter values extracted from the path.
@@ -118,7 +122,7 @@ public abstract class ResteasyReactiveRequestContext
     /**
      * The input stream, if an entity is present.
      */
-    private InputStream inputStream = EmptyInputStream.INSTANCE;
+    private InputStream inputStream;
 
     /**
      * used for {@link UriInfo#getMatchedURIs()}
@@ -161,10 +165,30 @@ public abstract class ResteasyReactiveRequestContext
      * @param target The resource target
      */
     public void restart(RuntimeResource target) {
+        restart(target, false);
+    }
+
+    public void restart(RuntimeResource target, boolean setLocatorTarget) {
         this.handlers = target.getHandlerChain();
         position = 0;
         parameters = new Object[target.getParameterTypes().length];
+        if (setLocatorTarget) {
+            previousResource = new PreviousResource(this.target, pathParamValues, previousResource);
+        }
         this.target = target;
+    }
+
+    /**
+     * Meant to be used when a error occurred early in processing chain
+     */
+    @Override
+    public void abortWith(Response response) {
+        setResult(response);
+        restart(getAbortHandlerChain());
+        // this is a valid action after suspend, in which case we must resume
+        if (isSuspended()) {
+            resume();
+        }
     }
 
     /**
@@ -202,6 +226,10 @@ public abstract class ResteasyReactiveRequestContext
     }
 
     public String getPathParam(int index) {
+        return doGetPathParam(index, pathParamValues);
+    }
+
+    private String doGetPathParam(int index, Object pathParamValues) {
         if (pathParamValues instanceof String[]) {
             return ((String[]) pathParamValues)[index];
         }
@@ -285,6 +313,10 @@ public abstract class ResteasyReactiveRequestContext
             setGenericReturnType(((GenericEntity<?>) result).getType());
         }
         return this;
+    }
+
+    public void handleUnmappedException(Throwable throwable) {
+        setResult(Response.serverError().build());
     }
 
     public RuntimeResource getTarget() {
@@ -535,6 +567,10 @@ public abstract class ResteasyReactiveRequestContext
         this.additionalAnnotations = additionalAnnotations;
     }
 
+    public boolean hasGenericReturnType() {
+        return this.genericReturnType != null;
+    }
+
     public Type getGenericReturnType() {
         if (genericReturnType == null) {
             if (target == null) {
@@ -581,7 +617,7 @@ public abstract class ResteasyReactiveRequestContext
     }
 
     protected void handleUnrecoverableError(Throwable throwable) {
-        ResteasyReactiveRequestContext.log.error("Request failed", throwable);
+        log.error("Request failed", throwable);
         if (serverResponse().headWritten()) {
             serverRequest().closeConnection();
         } else {
@@ -596,6 +632,7 @@ public abstract class ResteasyReactiveRequestContext
 
     @Override
     protected void requestScopeDeactivated() {
+        CurrentRequestManager.set(null);
     }
 
     @Override
@@ -613,38 +650,46 @@ public abstract class ResteasyReactiveRequestContext
             //already saved
             return;
         }
-        URITemplate classPath = target.getClassPath();
-        if (classPath != null) {
-            //this is not great, but the alternative is to do path based matching on every request
-            //given that this method is likely to be called very infrequently it is better to have a small
-            //cost here than a cost applied to every request
-            int pos = classPath.stem.length();
-            String path = getPathWithoutPrefix();
-            //we already know that this template matches, we just need to find the matched bit
-            for (int i = 1; i < classPath.components.length; ++i) {
-                URITemplate.TemplateComponent segment = classPath.components[i];
-                if (segment.type == URITemplate.Type.LITERAL) {
-                    pos += segment.literalText.length();
-                } else if (segment.type == URITemplate.Type.DEFAULT_REGEX) {
-                    for (; pos < path.length(); ++pos) {
-                        if (path.charAt(pos) == '/') {
-                            --pos;
-                            break;
+        if (target != null) {
+            URITemplate classPath = target.getClassPath();
+            if (classPath != null) {
+                //this is not great, but the alternative is to do path based matching on every request
+                //given that this method is likely to be called very infrequently it is better to have a small
+                //cost here than a cost applied to every request
+                int pos = classPath.stem.length();
+                String path = getPathWithoutPrefix();
+                //we already know that this template matches, we just need to find the matched bit
+                for (int i = 1; i < classPath.components.length; ++i) {
+                    URITemplate.TemplateComponent segment = classPath.components[i];
+                    if (segment.type == URITemplate.Type.LITERAL) {
+                        pos += segment.literalText.length();
+                    } else if (segment.type == URITemplate.Type.DEFAULT_REGEX) {
+                        for (; pos < path.length(); ++pos) {
+                            if (path.charAt(pos) == '/') {
+                                --pos;
+                                break;
+                            }
+                        }
+                    } else {
+                        Matcher matcher = segment.pattern.matcher(path);
+                        if (matcher.find(pos) && matcher.start() == pos) {
+                            pos = matcher.end();
                         }
                     }
-                } else {
-                    Matcher matcher = segment.pattern.matcher(path);
-                    if (matcher.find(pos) && matcher.start() == pos) {
-                        pos = matcher.end();
-                    }
                 }
+                matchedURIs.add(new UriMatch(path.substring(1, pos), null, null));
             }
-            matchedURIs.add(new UriMatch(path.substring(1, pos), null, null));
         }
         // FIXME: this may be better as context.normalisedPath() or getPath()
+        // TODO: does this entry make sense when target is null ?
         String path = serverRequest().getRequestPath();
-        matchedURIs.add(0, new UriMatch(path.substring(1, path.length() - (remaining == null ? 0 : remaining.length())),
-                target, endpointInstance));
+        if (path.equals(remaining)) {
+            matchedURIs.add(0, new UriMatch(path.substring(1), target, endpointInstance));
+        } else {
+            matchedURIs.add(0, new UriMatch(path.substring(1, path.length() - (remaining == null ? 0 : remaining.length())),
+                    target, endpointInstance));
+        }
+
     }
 
     public List<UriMatch> getMatchedURIs() {
@@ -652,7 +697,14 @@ public abstract class ResteasyReactiveRequestContext
         return matchedURIs;
     }
 
+    public boolean hasInputStream() {
+        return inputStream != null;
+    }
+
     public InputStream getInputStream() {
+        if (inputStream == null) {
+            inputStream = serverRequest().createInputStream();
+        }
         return inputStream;
     }
 
@@ -833,13 +885,22 @@ public abstract class ResteasyReactiveRequestContext
         return securityContext;
     }
 
+    public boolean isSecurityContextSet() {
+        return securityContext != null;
+    }
+
     protected SecurityContext createSecurityContext() {
         throw new UnsupportedOperationException();
     }
 
     public ResteasyReactiveRequestContext setSecurityContext(SecurityContext securityContext) {
         this.securityContext = securityContext;
+        securityContextUpdated(securityContext);
         return this;
+    }
+
+    protected void securityContextUpdated(SecurityContext securityContext) {
+
     }
 
     public void setOutputStream(OutputStream outputStream) {
@@ -866,4 +927,76 @@ public abstract class ResteasyReactiveRequestContext
     protected abstract Executor getEventLoop();
 
     public abstract Runnable registerTimer(long millis, Runnable task);
+
+    public String getResourceLocatorPathParam(String name) {
+        return getResourceLocatorPathParam(name, previousResource);
+    }
+
+    private String getResourceLocatorPathParam(String name, PreviousResource previousResource) {
+        if (previousResource == null) {
+            return null;
+        }
+
+        int index = 0;
+        URITemplate classPath = previousResource.locatorTarget.getClassPath();
+        if (classPath != null) {
+            for (URITemplate.TemplateComponent component : classPath.components) {
+                if (component.name != null) {
+                    if (component.name.equals(name)) {
+                        return doGetPathParam(index, previousResource.locatorPathParamValues);
+                    }
+                    index++;
+                } else if (component.names != null) {
+                    for (String nm : component.names) {
+                        if (nm.equals(name)) {
+                            return doGetPathParam(index, previousResource.locatorPathParamValues);
+                        }
+                    }
+                    index++;
+                }
+            }
+        }
+        for (URITemplate.TemplateComponent component : previousResource.locatorTarget.getPath().components) {
+            if (component.name != null) {
+                if (component.name.equals(name)) {
+                    return doGetPathParam(index, previousResource.locatorPathParamValues);
+                }
+                index++;
+            } else if (component.names != null) {
+                for (String nm : component.names) {
+                    if (nm.equals(name)) {
+                        return doGetPathParam(index, previousResource.locatorPathParamValues);
+                    }
+                }
+                index++;
+            }
+        }
+        return getResourceLocatorPathParam(name, previousResource.prev);
+    }
+
+    static class PreviousResource {
+
+        public PreviousResource(RuntimeResource locatorTarget, Object locatorPathParamValues, PreviousResource prev) {
+            this.locatorTarget = locatorTarget;
+            this.locatorPathParamValues = locatorPathParamValues;
+            this.prev = prev;
+        }
+
+        /**
+         * When a subresource has been located and the processing has been restarted (and thus target point to the new
+         * subresource),
+         * this field contains the target that resulted in the offloading to the new target
+         */
+        private final RuntimeResource locatorTarget;
+
+        /**
+         * When a subresource has been located and the processing has been restarted (and thus target point to the new
+         * subresource),
+         * this field contains the pathParamValues of the target that resulted in the offloading to the new target
+         */
+        private final Object locatorPathParamValues;
+
+        private final PreviousResource prev;
+
+    }
 }

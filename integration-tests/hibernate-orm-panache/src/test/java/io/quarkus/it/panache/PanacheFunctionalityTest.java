@@ -20,6 +20,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.quarkus.hibernate.orm.runtime.PersistenceUnitUtil;
+import io.quarkus.test.junit.DisabledOnIntegrationTest;
 import io.quarkus.test.junit.DisabledOnNativeImage;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.RestAssured;
@@ -135,7 +136,7 @@ public class PanacheFunctionalityTest {
     /**
      * This test is disabled in native mode as there is no interaction with the quarkus integration test endpoint.
      */
-    @DisabledOnNativeImage
+    @DisabledOnIntegrationTest
     @Test
     public void jsonbDeserializationHasAllFields() throws JsonProcessingException {
         // set Up
@@ -181,7 +182,7 @@ public class PanacheFunctionalityTest {
     @Test
     public void testMetrics() {
         RestAssured.when()
-                .get("/metrics")
+                .get("/q/metrics")
                 .then()
                 .body(containsString("vendor_hibernate_cache_update_timestamps_requests_total{entityManagerFactory=\""
                         + PersistenceUnitUtil.DEFAULT_PERSISTENCE_UNIT_NAME + "\",result=\"miss\"}"));

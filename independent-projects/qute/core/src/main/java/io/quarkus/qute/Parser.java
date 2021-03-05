@@ -6,6 +6,8 @@ import io.quarkus.qute.SectionHelperFactory.ParametersInfo;
 import io.quarkus.qute.TemplateNode.Origin;
 import java.io.IOException;
 import java.io.Reader;
+import java.io.StringReader;
+import java.nio.CharBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -56,6 +58,11 @@ class Parser implements Function<String, Expression>, ParserHelper {
     static final char END_COMPOSITE_PARAM = ')';
 
     private final EngineImpl engine;
+    private final Reader reader;
+    private final Optional<Variant> variant;
+    private final String templateId;
+    private final String generatedId;
+
     private StringBuilder buffer;
     private State state;
     private int line;
@@ -66,13 +73,16 @@ class Parser implements Function<String, Expression>, ParserHelper {
     private final Deque<Scope> scopeStack;
     private int sectionBlockIdx;
     private boolean ignoreContent;
-    private String id;
-    private String generatedId;
-    private Optional<Variant> variant;
     private AtomicInteger expressionIdGenerator;
+    private final List<Function<String, String>> contentFilters;
 
-    public Parser(EngineImpl engine) {
+    public Parser(EngineImpl engine, Reader reader, String templateId, String generatedId, Optional<Variant> variant) {
         this.engine = engine;
+        this.templateId = templateId;
+        this.generatedId = generatedId;
+        this.variant = variant;
+        this.reader = reader;
+
         this.state = State.TEXT;
         this.buffer = new StringBuilder();
         this.sectionStack = new ArrayDeque<>();
@@ -90,6 +100,7 @@ class Parser implements Function<String, Expression>, ParserHelper {
         this.line = 1;
         this.lineCharacter = 1;
         this.expressionIdGenerator = new AtomicInteger();
+        this.contentFilters = new ArrayList<>(5);
     }
 
     static class RootSectionHelperFactory implements SectionHelperFactory<SectionHelper> {
@@ -106,14 +117,21 @@ class Parser implements Function<String, Expression>, ParserHelper {
         }
     }
 
-    Template parse(Reader reader, Optional<Variant> variant, String id, String generatedId) {
+    Template parse() {
         long start = System.currentTimeMillis();
-        this.id = id;
-        this.generatedId = generatedId;
-        this.variant = variant;
+        Reader r = reader;
+
         try {
+            if (!contentFilters.isEmpty()) {
+                String contents = toString(reader);
+                for (Function<String, String> filter : contentFilters) {
+                    contents = filter.apply(contents);
+                }
+                r = new StringReader(contents);
+            }
+
             int val;
-            while ((val = reader.read()) != -1) {
+            while ((val = r.read()) != -1) {
                 processCharacter((char) val);
                 lineCharacter++;
             }
@@ -123,8 +141,17 @@ class Parser implements Function<String, Expression>, ParserHelper {
                     // Flush the last text segment
                     flushText();
                 } else {
+                    String reason;
+                    if (state == State.TAG_INSIDE_STRING_LITERAL) {
+                        reason = "unterminated string literal";
+                    } else if (state == State.TAG_INSIDE) {
+                        reason = "unterminated tag";
+                    } else {
+                        reason = "unexpected state [" + state + "]";
+                    }
                     throw parserError(
-                            "unexpected non-text buffer at the end of the template - probably an unterminated tag: " + buffer);
+                            "unexpected non-text buffer at the end of the template - " + reason + ": "
+                                    + buffer);
                 }
             }
 
@@ -179,6 +206,9 @@ class Parser implements Function<String, Expression>, ParserHelper {
                 break;
             case TAG_INSIDE:
                 tag(character);
+                break;
+            case TAG_INSIDE_STRING_LITERAL:
+                tagStringLiteral(character);
                 break;
             case COMMENT:
                 comment(character);
@@ -264,11 +294,21 @@ class Parser implements Function<String, Expression>, ParserHelper {
     }
 
     private void tag(char character) {
-        if (character == END_DELIMITER) {
+        if (LiteralSupport.isStringLiteralSeparator(character)) {
+            state = State.TAG_INSIDE_STRING_LITERAL;
+            buffer.append(character);
+        } else if (character == END_DELIMITER) {
             flushTag();
         } else {
             buffer.append(character);
         }
+    }
+
+    private void tagStringLiteral(char character) {
+        if (LiteralSupport.isStringLiteralSeparator(character)) {
+            state = State.TAG_INSIDE;
+        }
+        buffer.append(character);
     }
 
     private void tagCandidate(char character) {
@@ -476,8 +516,8 @@ class Parser implements Function<String, Expression>, ParserHelper {
 
     private TemplateException parserError(String message) {
         StringBuilder builder = new StringBuilder("Parser error");
-        if (!id.equals(generatedId)) {
-            builder.append(" in template [").append(id).append("]");
+        if (!templateId.equals(generatedId)) {
+            builder.append(" in template [").append(templateId).append("]");
         }
         builder.append(" on line ").append(line).append(": ")
                 .append(message);
@@ -665,6 +705,7 @@ class Parser implements Function<String, Expression>, ParserHelper {
 
         TEXT,
         TAG_INSIDE,
+        TAG_INSIDE_STRING_LITERAL,
         TAG_CANDIDATE,
         COMMENT,
         ESCAPE,
@@ -785,7 +826,7 @@ class Parser implements Function<String, Expression>, ParserHelper {
     }
 
     Origin origin(int lineCharacterOffset) {
-        return new OriginImpl(line, lineCharacter - lineCharacterOffset, lineCharacter, id, generatedId, variant);
+        return new OriginImpl(line, lineCharacter - lineCharacterOffset, lineCharacter, templateId, generatedId, variant);
     }
 
     private List<List<TemplateNode>> readLines(SectionNode rootNode) {
@@ -860,6 +901,18 @@ class Parser implements Function<String, Expression>, ParserHelper {
             }
         }
         return true;
+    }
+
+    private static String toString(Reader in)
+            throws IOException {
+        StringBuilder out = new StringBuilder();
+        CharBuffer buffer = CharBuffer.allocate(8192);
+        while (in.read(buffer) != -1) {
+            buffer.flip();
+            out.append(buffer);
+            buffer.clear();
+        }
+        return out.toString();
     }
 
     static class OriginImpl implements Origin {
@@ -942,10 +995,20 @@ class Parser implements Function<String, Expression>, ParserHelper {
     }
 
     @Override
+    public String getTemplateId() {
+        return templateId;
+    }
+
+    @Override
     public void addParameter(String name, String type) {
         // {@org.acme.Foo foo}
         Scope currentScope = scopeStack.peek();
         currentScope.putBinding(name, Expressions.TYPE_INFO_SEPARATOR + type + Expressions.TYPE_INFO_SEPARATOR);
+    }
+
+    @Override
+    public void addContentFilter(Function<String, String> filter) {
+        contentFilters.add(filter);
     }
 
     private static final SectionHelper ROOT_SECTION_HELPER = new SectionHelper() {

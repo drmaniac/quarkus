@@ -3,11 +3,12 @@ package io.quarkus.maven.it;
 import static io.quarkus.maven.it.ApplicationNameAndVersionTestUtil.assertApplicationPropertiesSetCorrectly;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
@@ -28,6 +29,7 @@ import java.util.zip.ZipOutputStream;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.maven.shared.invoker.MavenInvocationException;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.maven.it.verifier.MavenProcessInvocationResult;
@@ -36,13 +38,27 @@ import io.quarkus.test.devmode.util.DevModeTestUtils;
 
 /**
  * @author <a href="http://escoffier.me">Clement Escoffier</a>
- *
+ *         <p>
  *         NOTE to anyone diagnosing failures in this test, to run a single method use:
- *
+ *         <p>
  *         mvn install -Dit.test=DevMojoIT#methodName
  */
 @DisableForNative
 public class DevMojoIT extends RunAndCheckMojoTestBase {
+
+    @Test
+    public void testSystemPropertiesConfig() throws MavenInvocationException, IOException {
+        testDir = initProject("projects/dev-mode-sys-props-config");
+        run(true);
+        assertThat(DevModeTestUtils.getHttpResponse("/hello")).isEqualTo("hello, out there");
+    }
+
+    @Test
+    public void testEnvironmentVariablesConfig() throws MavenInvocationException, IOException {
+        testDir = initProject("projects/dev-mode-env-vars-config");
+        run(true);
+        assertThat(DevModeTestUtils.getHttpResponse("/hello")).isEqualTo("hello, WORLD");
+    }
 
     @Test
     public void testPropertyOverridesTest() throws MavenInvocationException, IOException {
@@ -51,7 +67,7 @@ public class DevMojoIT extends RunAndCheckMojoTestBase {
     }
 
     @Test
-    public void testSystemPropertyWithSpaces() throws MavenInvocationException, IOException {
+    public void testSystemPropertyWithSpacesOnCommandLine() throws MavenInvocationException, IOException {
         testDir = initProject("projects/classic", "projects/project-classic-prop-with-spaces");
         runAndCheck("-Dgreeting=\"1 2 3\"");
         final String greeting = DevModeTestUtils.getHttpResponse("/app/hello/greeting");
@@ -72,16 +88,7 @@ public class DevMojoIT extends RunAndCheckMojoTestBase {
         // read the log and check the passed in args
         final File log = new File(testDir, "build-command-mode-app-args.log");
         assertThat(log).exists();
-        String loggedArgs = null;
-        try (BufferedReader reader = new BufferedReader(new FileReader(log))) {
-            String s;
-            while ((s = reader.readLine()) != null) {
-                if (s.startsWith("ARGS: ")) {
-                    loggedArgs = s;
-                    break;
-                }
-            }
-        }
+        String loggedArgs = extractLoggedArgs(log);
         assertThat(loggedArgs).isEqualTo("ARGS: [1, 2]");
     }
 
@@ -99,17 +106,24 @@ public class DevMojoIT extends RunAndCheckMojoTestBase {
         // read the log and check the passed in args
         final File log = new File(testDir, "build-command-mode-app-pom-args.log");
         assertThat(log).exists();
+        String loggedArgs = extractLoggedArgs(log);
+        assertThat(loggedArgs).isEqualTo("ARGS: [plugin, pom, config]");
+    }
+
+    private String extractLoggedArgs(final File log) throws IOException, FileNotFoundException {
         String loggedArgs = null;
         try (BufferedReader reader = new BufferedReader(new FileReader(log))) {
             String s;
             while ((s = reader.readLine()) != null) {
-                if (s.startsWith("ARGS: ")) {
-                    loggedArgs = s;
+                // not startsWith() because line might start with ANSI escape sequence (which must be stripped)
+                int indexOfARGS = s.indexOf("ARGS: ");
+                if (indexOfARGS > -1) {
+                    loggedArgs = s.substring(indexOfARGS);
                     break;
                 }
             }
         }
-        assertThat(loggedArgs).isEqualTo("ARGS: [plugin, pom, config]");
+        return loggedArgs;
     }
 
     @Test
@@ -198,6 +212,70 @@ public class DevMojoIT extends RunAndCheckMojoTestBase {
         await()
                 .pollDelay(100, TimeUnit.MILLISECONDS)
                 .atMost(1, TimeUnit.MINUTES).until(() -> DevModeTestUtils.getHttpResponse("/app/hello").contains("carambar"));
+    }
+
+    @Test
+    public void testThatInstrumentationBasedReloadWorks() throws MavenInvocationException, IOException {
+        testDir = initProject("projects/classic-inst", "projects/project-intrumentation-reload");
+        runAndCheck();
+
+        //if there is an insturmentation based reload this will stay the same
+        String firstUuid = DevModeTestUtils.getHttpResponse("/app/uuid");
+
+        // Edit the "Hello" message.
+        File source = new File(testDir, "src/main/java/org/acme/HelloResource.java");
+        String uuid = UUID.randomUUID().toString();
+        filter(source, Collections.singletonMap("return \"hello\";", "return \"" + uuid + "\";"));
+
+        // Wait until we get "uuid"
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(1, TimeUnit.MINUTES).until(() -> DevModeTestUtils.getHttpResponse("/app/hello").contains(uuid));
+
+        //verify that this was an instrumentation based reload
+        Assertions.assertEquals(firstUuid, DevModeTestUtils.getHttpResponse("/app/uuid"));
+
+        source = new File(testDir, "src/main/java/org/acme/HelloService.java");
+        filter(source, Collections.singletonMap("\"Stuart\"", "\"Stuart Douglas\""));
+
+        // Wait until we get "Stuart Douglas"
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(1, TimeUnit.MINUTES)
+                .until(() -> DevModeTestUtils.getHttpResponse("/app/name").contains("Stuart Douglas"));
+
+        //this bean observes startup event, so it should be different UUID
+        String secondUUid = DevModeTestUtils.getHttpResponse("/app/uuid");
+        Assertions.assertNotEquals(secondUUid, firstUuid);
+
+        //now disable instrumentation based restart, and try again
+        //change it back to hello
+        DevModeTestUtils.getHttpResponse("/app/disable");
+        source = new File(testDir, "src/main/java/org/acme/HelloResource.java");
+        filter(source, Collections.singletonMap("return \"" + uuid + "\";", "return \"hello\";"));
+
+        // Wait until we get "hello"
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(1, TimeUnit.MINUTES).until(() -> DevModeTestUtils.getHttpResponse("/app/hello").contains("hello"));
+
+        //verify that this was not instrumentation based reload
+        Assertions.assertNotEquals(secondUUid, DevModeTestUtils.getHttpResponse("/app/uuid"));
+        secondUUid = DevModeTestUtils.getHttpResponse("/app/uuid");
+
+        //now re-enable
+        //and repeat
+        DevModeTestUtils.getHttpResponse("/app/enable");
+        source = new File(testDir, "src/main/java/org/acme/HelloResource.java");
+        filter(source, Collections.singletonMap("return \"hello\";", "return \"" + uuid + "\";"));
+
+        // Wait until we get uuid
+        await()
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .atMost(1, TimeUnit.MINUTES).until(() -> DevModeTestUtils.getHttpResponse("/app/hello").contains(uuid));
+
+        //verify that this was an instrumentation based reload
+        Assertions.assertEquals(secondUUid, DevModeTestUtils.getHttpResponse("/app/uuid"));
     }
 
     @Test
@@ -299,7 +377,7 @@ public class DevMojoIT extends RunAndCheckMojoTestBase {
         // Wait until we get "uuid"
         await()
                 .pollDelay(100, TimeUnit.MILLISECONDS)
-                .atMost(1, TimeUnit.MINUTES).until(() -> DevModeTestUtils.getHttpResponse("/openapi").contains("hello"));
+                .atMost(1, TimeUnit.MINUTES).until(() -> DevModeTestUtils.getHttpResponse("/q/openapi").contains("hello"));
     }
 
     @Test
@@ -308,15 +386,37 @@ public class DevMojoIT extends RunAndCheckMojoTestBase {
         runAndCheck();
 
         final List<String> extDepWarnings = Files.readAllLines(testDir.toPath().resolve("build-project-with-extension.log"))
-                .stream().filter(s -> s.startsWith("[WARNING] Local Quarkus extension dependency "))
+                .stream()
+                .filter(s -> s.startsWith(
+                        "[WARNING] [io.quarkus.bootstrap.devmode.DependenciesFilter] Local Quarkus extension dependency "))
                 .collect(Collectors.toList());
         assertTrue(extDepWarnings
-                .contains("[WARNING] Local Quarkus extension dependency org.acme:acme-quarkus-ext will not be hot-reloadable"));
+                .contains(
+                        "[WARNING] [io.quarkus.bootstrap.devmode.DependenciesFilter] Local Quarkus extension dependency org.acme:acme-quarkus-ext will not be hot-reloadable"));
         assertTrue(extDepWarnings
-                .contains("[WARNING] Local Quarkus extension dependency org.acme:acme-common will not be hot-reloadable"));
+                .contains(
+                        "[WARNING] [io.quarkus.bootstrap.devmode.DependenciesFilter] Local Quarkus extension dependency org.acme:acme-common will not be hot-reloadable"));
         assertTrue(extDepWarnings.contains(
-                "[WARNING] Local Quarkus extension dependency org.acme:acme-common-transitive will not be hot-reloadable"));
+                "[WARNING] [io.quarkus.bootstrap.devmode.DependenciesFilter] Local Quarkus extension dependency org.acme:acme-common-transitive will not be hot-reloadable"));
         assertEquals(3, extDepWarnings.size());
+    }
+
+    @Test
+    public void testRestClientCustomHeadersExtension() throws MavenInvocationException, IOException {
+        testDir = getTargetDir("projects/rest-client-custom-headers-extension");
+        runAndCheck();
+
+        final List<String> extDepWarnings = Files
+                .readAllLines(testDir.toPath().resolve("build-rest-client-custom-headers-extension.log"))
+                .stream()
+                .filter(s -> s.startsWith(
+                        "[WARNING] [io.quarkus.bootstrap.devmode.DependenciesFilter] Local Quarkus extension dependency "))
+                .collect(Collectors.toList());
+        assertTrue(extDepWarnings
+                .contains(
+                        "[WARNING] [io.quarkus.bootstrap.devmode.DependenciesFilter] Local Quarkus extension dependency org.acme:rest-client-custom-headers will not be hot-reloadable"));
+
+        assertThat(DevModeTestUtils.getHttpResponse("/app/frontend")).isEqualTo("CustomValue1 CustomValue2");
     }
 
     @Test
@@ -839,15 +939,6 @@ public class DevMojoIT extends RunAndCheckMojoTestBase {
     }
 
     @Test
-    public void testDevModeWithoutJavaSrc() throws MavenInvocationException, IOException {
-        testDir = initProject("projects/classic-no-java-src");
-        run(true);
-        getHttpResponse();
-
-        assertThat(running.log()).contains("The project's sources directory does not exist");
-    }
-
-    @Test
     public void testMultiModuleDevModeWithoutJavaSrc() throws MavenInvocationException, IOException {
         testDir = initProject("projects/multimodule", "projects/multimodule-no-java-src");
         runAndCheck();
@@ -904,5 +995,17 @@ public class DevMojoIT extends RunAndCheckMojoTestBase {
     public void testThatDependencyInParentIsEvaluated() throws IOException, MavenInvocationException {
         testDir = initProject("projects/multimodule-parent-dep");
         runAndCheck();
+    }
+
+    @Test
+    public void testThatGenerateCodeGoalIsNotTriggeredIfNotConfigured() throws IOException, MavenInvocationException {
+        testDir = initProject("projects/classic-no-generate");
+        // the skip parameter triggers a log statement by the generate goal,
+        // otherwise there would be no way to tell from the logfile that the goal was invoked
+        runAndCheck(false, "-Dquarkus.generate-code.skip=true");
+
+        assertThat(running.log()).doesNotContain("Skipping Quarkus code generation");
+        assertThat(running.log()).contains("Copying 1 resource"); // maven-resource-plugin
+        assertThat(running.log()).contains("Compiling 2 source files"); // maven-compiler-plugin
     }
 }

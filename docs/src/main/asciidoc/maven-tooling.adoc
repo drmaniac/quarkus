@@ -41,7 +41,7 @@ The following table lists the attributes you can pass to the `create` command:
 | The artifact id of the created project. Not passing it triggers the interactive mode.
 
 | `projectVersion`
-| `1.0-SNAPSHOT`
+| `1.0.0-SNAPSHOT`
 | The version of the created project
 
 | `platformGroupId`
@@ -149,6 +149,16 @@ with compilation or deployment an error page will let you know.
 
 Hit `CTRL+C` to stop the application.
 
+[NOTE]
+====
+By default, `quarkus:dev` sets the debug host to `localhost` (for security reasons). If you need to change this, for example to enable debugging on all hosts, you can use the `-DdebugHost` option like so:
+
+[source,bash]
+----
+./mvnw compile quarkus:dev -DdebugHost=0.0.0.0
+----
+====
+
 === Remote Development Mode
 
 It is possible to use development mode remotely, so that you can run Quarkus in a container environment (such as OpenShift)
@@ -196,6 +206,10 @@ application via HTTP calls.
 If you do not want to use the HTTP feature then you can simply run the `remote-dev` command without specifying the URL.
 In this mode the command will continuously rebuild the local application, so you can use an external tool such as odo or
 rsync to sync to the remote application.
+
+All the config options are shown below:
+
+include::{generated-dir}/config/quarkus-live-reload-live-reload-config.adoc[opts=optional, leveloffset=+1]
 
 NOTE: It is recommended you use SSL when using remote dev mode, however even if you are using an unencrypted connection
 your password is never sent directly over the wire. For the initial connection request the password is hashed with the
@@ -254,7 +268,7 @@ An additional system property `suspend` can be used to suspend the JVM, when lau
 
 [TIP]
 ====
-You can also run a Quarkus application in debug mode with a suspended JVM using `./mvnw compile quarkus:dev -Ddebug` which is a shorthand for `./mvnw compile quarkus:dev -Ddebug=true`.
+You can also run a Quarkus application in debug mode with a suspended JVM using `./mvnw compile quarkus:dev -Dsuspend` which is a shorthand for `./mvnw compile quarkus:dev -Dsuspend=true`.
 
 Then, attach your debugger to `localhost:5005`.
 ====
@@ -321,7 +335,7 @@ Now you should be able to execute `./mvnw quarkus-bootstrap:build-tree` on your 
 [source,text,subs=attributes+]
 ----
 [INFO] --- quarkus-bootstrap-maven-plugin:{quarkus-version}:build-tree (default-cli) @ getting-started ---
-[INFO] org.acme:getting-started:jar:1.0-SNAPSHOT
+[INFO] org.acme:getting-started:jar:1.0.0-SNAPSHOT
 [INFO] └─ io.quarkus:quarkus-resteasy-deployment:jar:{quarkus-version} (compile)
 [INFO]    ├─ io.quarkus:quarkus-resteasy-server-common-deployment:jar:{quarkus-version} (compile)
 [INFO]    │  ├─ io.quarkus:quarkus-core-deployment:jar:{quarkus-version} (compile)
@@ -412,7 +426,7 @@ If you have not used <<project-creation,project scaffolding>>, add the following
     <dependencies>
         <dependency> <1>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-bom</artifactId>
+            <artifactId>quarkus-universe-bom</artifactId>
             <version>${quarkus.platform.version}</version>
             <type>pom</type>
             <scope>import</scope>
@@ -426,10 +440,13 @@ If you have not used <<project-creation,project scaffolding>>, add the following
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-maven-plugin</artifactId>
             <version>${quarkus-plugin.version}</version>
+            <extensions>true</extensions>
             <executions>
                 <execution>
                     <goals>
                         <goal>build</goal>
+                        <goal>generate-code</goal>
+                        <goal>generate-code-tests</goal>
                     </goals>
                 </execution>
             </executions>
@@ -490,10 +507,24 @@ If you have not used <<project-creation,project scaffolding>>, add the following
 <5> Enable the `native` package type. The build will therefore produce a native executable.
 <6> If you want to test your native executable with Integration Tests, add the following plugin configuration. Test names `*IT` and annotated `@NativeImageTest` will be run against the native executable. See the link:building-native-image[Native executable guide] for more info.
 
+=== Using fast-jar
+
+`fast-jar` is now the default quarkus package type. The result of `./mvnw package` command is a new directory under `target` named `quarkus-app`.
+
+You can run the application using: `java -jar target/quarkus-app/quarkus-run.jar`.
+
+WARNING: In order to successfully run the produced jar, you need to have the entire contents of the `quarkus-app` directory. If any of the files are missing, the application will not start or
+might not function correctly.
+
+TIP: The `fast-jar` packaging results in creating an artifact that starts a little faster and consumes slightly less memory than a legacy Quarkus jar
+because it has indexed information about which dependency jar contains classes and resources. It can thus avoid the lookup into potentially every jar
+on the classpath that the legacy jar necessitates, when loading a class or resource.
+
 [[uber-jar-maven]]
 === Uber-Jar Creation
 
-Quarkus Maven plugin supports the generation of Uber-Jars by specifying a `quarkus.package.type=uber-jar` configuration option in your `application.properties`.
+Quarkus Maven plugin supports the generation of Uber-Jars by specifying a `quarkus.package.type=uber-jar` configuration option in your `application.properties`
+(or `<quarkus.package.type>uber-jar</quarkus.package.type>` in your `pom.xml`).
 
 The original jar will still be present in the `target` directory but it will be renamed to contain the `.original` suffix.
 

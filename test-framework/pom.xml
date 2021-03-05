@@ -13,6 +13,11 @@
     <artifactId>quarkus-test-framework</artifactId>
     <name>Quarkus - Test Framework</name>
     <packaging>pom</packaging>
+
+    <properties>
+        <enforce-test-deps-scope.skip>true</enforce-test-deps-scope.skip>
+    </properties>
+
     <modules>
         <module>artemis</module>
         <module>common</module>
@@ -26,10 +31,12 @@
         <module>amazon-lambda</module>
         <module>arquillian</module>
         <module>devmode-test-utils</module>
+        <module>devtools</module>
         <module>maven</module>
         <module>vault</module>
         <module>ldap</module>
         <module>security</module>
+        <module>jacoco</module>
     </modules>
 
 </project>

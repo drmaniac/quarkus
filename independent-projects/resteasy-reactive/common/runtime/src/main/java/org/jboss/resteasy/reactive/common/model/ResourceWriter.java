@@ -22,8 +22,9 @@ public class ResourceWriter {
     private volatile ServerMediaType serverMediaType;
     private volatile MessageBodyWriter<?> instance;
 
-    public void setFactory(BeanFactory<MessageBodyWriter<?>> factory) {
+    public ResourceWriter setFactory(BeanFactory<MessageBodyWriter<?>> factory) {
         this.factory = factory;
+        return this;
     }
 
     public BeanFactory<MessageBodyWriter<?>> getFactory() {
@@ -72,24 +73,21 @@ public class ResourceWriter {
         if (mediaTypes == null) {
             //todo: does this actually need to be threadsafe?
             synchronized (this) {
-                List<MediaType> ret = new ArrayList<>();
-                for (String i : mediaTypeStrings) {
-                    ret.add(MediaType.valueOf(i));
+                List<MediaType> mts = new ArrayList<>(mediaTypeStrings.size());
+                for (int i = 0; i < mediaTypeStrings.size(); i++) {
+                    mts.add(MediaType.valueOf(mediaTypeStrings.get(i)));
                 }
-                mediaTypes = Collections.unmodifiableList(ret);
+                mediaTypes = Collections.unmodifiableList(mts);
             }
         }
         return mediaTypes;
     }
 
-    public List<MediaType> modifiableMediaTypes() {
-        return new ArrayList<>(mediaTypes());
-    }
-
     public ServerMediaType serverMediaType() {
         if (serverMediaType == null) {
             synchronized (this) {
-                serverMediaType = new ServerMediaType(mediaTypes(), StandardCharsets.UTF_8.name());
+                // a MessageBodyWriter should always return its configured media type when negotiating, hence the 'false' for 'useSuffix'
+                serverMediaType = new ServerMediaType(mediaTypes(), StandardCharsets.UTF_8.name(), false, false);
             }
         }
         return serverMediaType;

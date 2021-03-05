@@ -82,6 +82,7 @@ public class VanillaKubernetesProcessor {
         List<ConfiguratorBuildItem> result = new ArrayList<>();
         result.addAll(KubernetesCommonHelper.createPlatformConfigurators(config));
         result.addAll(KubernetesCommonHelper.createGlobalConfigurators(ports));
+        result.add(new ConfiguratorBuildItem(new ApplyExpositionConfigurator((config.ingress))));
         return result;
 
     }
@@ -103,7 +104,6 @@ public class VanillaKubernetesProcessor {
         result.addAll(KubernetesCommonHelper.createDecorators(project, KUBERNETES, name, config,
                 metricsConfiguration,
                 annotations, labels, command, ports, livenessPath, readinessPath, roles, roleBindings));
-
         if (config.getReplicas() != 1) {
             result.add(new DecoratorBuildItem(KUBERNETES, new ApplyReplicasDecorator(name, config.getReplicas())));
         }
@@ -139,7 +139,7 @@ public class VanillaKubernetesProcessor {
         // Probe port handling
         Integer port = ports.stream().filter(p -> HTTP_PORT.equals(p.getName())).map(KubernetesPortBuildItem::getPort)
                 .findFirst().orElse(DEFAULT_HTTP_PORT);
-        result.add(new DecoratorBuildItem(KUBERNETES, new ApplyHttpGetActionPortDecorator(port)));
+        result.add(new DecoratorBuildItem(KUBERNETES, new ApplyHttpGetActionPortDecorator(name, name, port)));
 
         return result;
     }

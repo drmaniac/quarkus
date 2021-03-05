@@ -11,9 +11,6 @@ include::./attributes.adoc[]
 :sectnums:
 :sectnumlevels: 4
 :toc:
-:extension-status: experimental
-
-include::./status-include.adoc[]
 
 Qute is a templating engine designed specifically to meet the Quarkus needs.
 The usage of reflection is minimized to reduce the size of native images.
@@ -344,31 +341,60 @@ Another built-in section that modifies the current context object is `let`/`set`
 
 NOTE: The current context can be accessed via the implicit binding `this`.
 
-==== Built-in Operators
+==== Built-in Resolvers
 
 |===
-|Operator |Description	|Examples
+|Name |Description	|Examples
 
-|Elvis 
+|Elvis Operator
 |Outputs the default value if the previous part cannot be resolved or resolves to `null`.
 |`{person.name ?: 'John'}`, `{person.name or 'John'}`
 
-|Ternary 
+|orEmpty
+|Outputs an empty list if the previous part cannot be resolved or resolves to `null`.
+|`{#for pet in pets.orEmpty}{pet.name}{/for}`
+
+|Ternary Operator
 |Shorthand for if-then-else statement. Unlike in <<if_section>> nested operators are not supported.
 |`{item.isActive ? item.name : 'Inactive item'}` outputs the value of `item.name` if `item.isActive` resolves to `true`.
 
-|Logical AND 
+|Logical AND Operator
 |Outputs `true` if both parts are not `falsy` as described in the <<if_section>>. The parameter is only evaluated if needed.
 |`{person.isActive && person.hasStyle}`
 
-|Logical OR 
+|Logical OR Operator
 |Outputs `true` if any of the parts is not `falsy` as described in the <<if_section>>. The parameter is only evaluated if needed.
 |`{person.isActive \|\| person.hasStyle}`
+
 |===
 
 TIP: The condition in a ternary operator evaluates to `true` if the value is not considered `falsy` as described in the <<if_section>>.
 
 NOTE: In fact, the operators are implemented as "virtual methods" that consume one parameter and can be used with infix notation, i.e. `{person.name or 'John'}` is translated to `{person.name.or('John')}`.
+
+==== Arrays
+
+You can iterate over elements of an array with the <<loop_section>>. Moreover, it's also possible to get the length of the specified array and access the elements directly via an index value.
+
+.Array Examples
+[source,html]
+----
+<h1>Array of length: {myArray.length}</h1> <1>
+<ul>
+  <li>First: {myArray.0}</li> <2>
+  <li>Second: {myArray[1]}</li> <3>
+  <li>Third: {myArray.get(2)}</li> <4>
+</ul>
+<ol>
+ {#for element in myArray}
+ <li>{element}</li>
+ {/for}
+</ol>
+----
+<1> Outputs the length of the array.
+<2> Outputs the first element of the array.
+<3> Outputs the second element of the array using the bracket notation.
+<4> Outputs the third element of the array via the virtual method `get()`.
 
 ==== Character Escapes
 
@@ -440,6 +466,13 @@ Virtual method parameters can be "nested" virtual method invocations.
 ----
 <1> `item.calculateDiscount(10)` is evaluated first and then passed as an argument to `item.subtractPrice()`.
 
+==== Evaluation of `CompletionStage` and `Uni` Objects
+
+Objects that implement `java.util.concurrent.CompletionStage` and `io.smallrye.mutiny.Uni` are evaluated in a special way.
+If a part of an expression resolves to a `CompletionStage`, the resolution continues once this stage is completed and the next part of the expression (if any) is evaluated against the result of the completed stage.
+For example, if there is an expression `{foo.size}` and `foo` resolves to `CompletionStage<List<String>>` then `size` is resolved against the completed result, i.e. `List<String>`.
+If a part of an expression resolves to a `Uni`, a `CompletionStage` is first created from `Uni` using `Uni#subscribeAsCompletionStage()` and then evaluated as described above.
+
 [[sections]]
 === Sections
 
@@ -470,6 +503,7 @@ A section helper that defines the logic of a section can "execute" any of the bl
 {/if}
 ----
 
+[[loop_section]]
 ==== Loop Section
 
 The loop section makes it possible to iterate over an instance of `Iterable`, `Map` 's entry set, `Stream` and an Integer.
@@ -650,7 +684,7 @@ All other blocks are ignored (this behavior differs to the Java `switch` where a
 {#switch person.name}
   {#case 'John'} <1>
     Hey John!
-  {#case 'Mary'} <1>
+  {#case 'Mary'}
     Hey Mary!
 {/switch}
 ----
@@ -909,12 +943,42 @@ NOTE: The template rendering is divided in two phases. During the first phase, w
 
 === Engine Configuration
 
+==== Value Resolvers
+
+Value resolvers are used when evaluating expressions.
+A custom `io.quarkus.qute.ValueResolver` can be registered programmatically via `EngineBuilder.addValueResolver()`.
+
+.`ValueResolver` Builder Example
+[source,java]
+----
+engineBuilder.addValueResolver(ValueResolver.builder()
+    .appliesTo(ctx -> ctx.getBase() instanceof Long && ctx.getName().equals("tenTimes"))
+    .resolveSync(ctx -> (Long) ctx.getBase() * 10)
+    .build());
+----
+
 ==== Template Locator
 
 Manual registration is sometimes handy but it's also possible to register a template locator using `EngineBuilder.addLocator(Function<String, Optional<Reader>>)`.
 This locator is used whenever the `Engine.getTemplate()` method is called and the engine has no template for a given id stored in the cache.
 
 NOTE: In Quarkus, all templates from the `src/main/resources/templates` are located automatically.
+
+==== Content Filters
+
+Content filters can be used to modify the template contents before parsing.
+
+.Content Filter Example
+[source,java]
+----
+engineBuilder.addParserHook(new ParserHook() {
+    @Override
+    public void beforeParsing(ParserHelper parserHelper) {
+        parserHelper.addContentFilter(contents -> contents.replace("${", "$\\{")); <1>
+    }
+});
+----
+<1> Escape all occurences of `${`.
 
 [[quarkus_integration]]
 == Quarkus Integration
@@ -936,23 +1000,41 @@ Moreover, all templates located in the `src/main/resources/templates` directory 
 ----
 import io.quarkus.qute.Engine;
 import io.quarkus.qute.Template;
-import io.quarkus.qute.api.ResourcePath;
+import io.quarkus.qute.Location;
 
 class MyBean {
 
     @Inject 
     Template items; <1>
 
-    @ResourcePath("detail/items2_v1.html") <2>
+    @Location("detail/items2_v1.html") <2>
     Template items2;
 
     @Inject
     Engine engine; <3>
 }
 ----
-<1> If there is no `ResourcePath` qualifier provided, the field name is used to locate the template. In this particular case, the container will attempt to locate a template with path `src/main/resources/templates/items.html`.
-<2> The `ResourcePath` qualifier instructs the container to inject a template from a path relative from `src/main/resources/templates`. In this case, the full path is `src/main/resources/templates/detail/items2_v1.html`. 
+<1> If there is no `Location` qualifier provided, the field name is used to locate the template. In this particular case, the container will attempt to locate a template with path `src/main/resources/templates/items.html`.
+<2> The `Location` qualifier instructs the container to inject a template from a path relative from `src/main/resources/templates`. In this case, the full path is `src/main/resources/templates/detail/items2_v1.html`. 
 <3> Inject the configured `Engine` instance.
+
+It's also possible to contribute to the engine configuration via a CDI observer method.
+
+.`EngineBuilder` Observer Example
+[source,java]
+----
+import io.quarkus.qute.EngineBuilder;
+
+class MyBean {
+
+    void configureEngine(@Observes EngineBuilder builder) {
+       builder.addValueResolver(ValueResolver.builder()
+                .appliesTo(ctx -> ctx.getBase() instanceof Long && ctx.getName().equals("tenTimes"))
+                .resolveSync(ctx -> (Long) ec.getBase() * 10)
+                .build());
+    }
+}
+----
 
 === Template Variants
 
@@ -1077,7 +1159,7 @@ import javax.ws.rs.core.MediaType;
 
 import io.quarkus.qute.TemplateInstance;
 import io.quarkus.qute.Template;
-import io.quarkus.qute.api.CheckedTemplate;
+import io.quarkus.qute.CheckedTemplate;
 
 @Path("item")
 public class ItemResource {
@@ -1108,7 +1190,7 @@ package org.acme.quarkus.sample;
 
 import io.quarkus.qute.TemplateInstance;
 import io.quarkus.qute.Template;
-import io.quarkus.qute.api.CheckedTemplate;
+import io.quarkus.qute.CheckedTemplate;
 
 @CheckedTemplate
 public class Templates {
@@ -1167,11 +1249,8 @@ The method name is used to match the property name by default.
 However, it is possible to specify the matching name with `TemplateExtension#matchName()`.
 A special constant - `TemplateExtension#ANY` - may be used to specify that the extension method matches any name.
 It is also possible to match the name against a regular expression specified in `TemplateExtension#matchRegex()`.
-In both cases, a string method parameter is used to pass the property name.
+In both cases, an additional string method parameter must be used to pass the property name.
 If both `matchName()` and `matchRegex()` are set the regular expression is used for matching.
-
-If a namespace is specified the method must declare at least one parameter and the first parameter must be a string. 
-If no namespace is specified the method must declare at least two parameters and the second parameter must be a string. 
 
 .Extension Method Example
 [source,java]
@@ -1391,8 +1470,8 @@ class Item {
 [[resteasy_integration]]
 === RESTEasy Integration
 
-If you want to use Qute in your JAX-RS application, you'll need to add the `quarkus-resteasy-qute` extension first.
-In your `pom.xml` file, add:
+If you want to use Qute in your JAX-RS application, then depending on which JAX-RS stack you are using, you'll need to register the proper extension first.
+If you are using the traditional `quakus-resteasy` extension, then in your `pom.xml` file, add:
 
 [source,xml]
 ----
@@ -1402,8 +1481,19 @@ In your `pom.xml` file, add:
 </dependency>
 ----
 
-This extension registers a special `ContainerResponseFilter` implementation so that a resource method can return a `TemplateInstance` and the filter takes care of all necessary steps.
-A simple JAX-RS resource may look like this:
+If instead you are using RESTEasy Reactive via the `quarkus-resteasy-reactive` extension, then in your `pom.xml` file, add:
+
+[source,xml]
+----
+<dependency>
+    <groupId>io.quarkus</groupId>
+    <artifactId>quarkus-resteasy-reactive-qute</artifactId>
+</dependency>
+----
+
+Both of these extensions register a special `ContainerResponseFilter` implementation which enables resource methods to return a `TemplateInstance`, thus freeing users of having to take care of all necessary internal steps.
+
+The end result is that a using Qute within a JAX-RS resource may look as simple as:
 
 .HelloResource.java
 [source,java]
@@ -1431,7 +1521,7 @@ public class HelloResource {
     }
 }
 ----
-<1> If there is no `@ResourcePath` qualifier provided, the field name is used to locate the template. In this particular case, we're injecting a template with path `templates/hello.txt`.
+<1> If there is no `@Location` qualifier provided, the field name is used to locate the template. In this particular case, we're injecting a template with path `templates/hello.txt`.
 <2> `Template.data()` returns a new template instance that can be customized before the actual rendering is triggered. In this case, we put the name value under the key `name`. The data map is accessible during rendering. 
 <3> Note that we don't trigger the rendering - this is done automatically by a special `ContainerResponseFilter` implementation.
 
@@ -1458,7 +1548,7 @@ class DetailResource {
 <1> Inject a variant template with base path derived from the injected field - `src/main/resources/templates/item`.
 <2> For `text/plain` the `src/main/resources/templates/item.txt` template is used. For `text/html` the `META-INF/resources/templates/item.html` template is used.
 
-The `io.quarkus.resteasy.qute.RestTemplate` util class can be used to obtain a template instance from a body of a JAX-RS resource method:
+The `RestTemplate` util class can be used to obtain a template instance from a body of a JAX-RS resource method:
 
 .RestTemplate Example
 [source,java]
@@ -1585,6 +1675,47 @@ hello_name=Hallo {name}! <1> <2>
 ----
 <1> Each line in a localized file represents a message template. 
 <2> Keys and values are separated by the equals sign.
+
+Once we have the localized bundles defined we need a way to _select_ a correct bundle.
+If you use a message bundle expression in a template you'll have to specify the `locale` attribute of a template instance.
+
+.`locale` Attribute Example
+[source,java]
+----
+@Singleton
+public class MyBean {
+   
+    @Inject
+    Template hello;
+    
+    String render() {
+       return hello.instance().setAttribute("locale", Locale.forLanguageTag("cs")).render(); <1>
+    }
+}
+----
+<1> You can set a `Locale` instance or a locale tag string (IETF).
+
+
+NOTE: When using <<resteasy_integration,quarkus-resteasy-qute>> the `locale` attribute is derived from the the `Accept-Language` header if not set by a user.
+
+The `@Localized` qualifier can be used to inject a localized message bundle interface.
+
+.Injected Localized Message Bundle Example
+[source,java]
+----
+@Singleton
+public class MyBean {
+   
+    @Localized("cs") <1>
+    AppMessages msg;
+    
+    String render() {
+       return msg.hello_name("Jachym");
+    }
+}
+----
+<1> The annotation value is a locale tag string (IETF).
+
 
 === Configuration Reference
 

@@ -128,7 +128,7 @@ mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectGroupId=org.acme \
     -DprojectArtifactId=neo4j-quickstart \
     -DclassName="org.acme.datasource.GreetingResource" \
-    -Dextensions="neo4j,resteasy-jackson"
+    -Dextensions="resteasy,neo4j,resteasy-jackson"
 cd neo4j-quickstart
 ----
 
@@ -385,7 +385,7 @@ The Cypher manual linked in the introduction will help you with modelling your q
 === Packaging
 
 Packaging your application is as simple as `./mvnw clean package`.
-It can be run with `java -jar target/neo4j-quickstart-1.0-SNAPSHOT-runner.jar`.
+It can be run with `java -jar target/quarkus-app/quarkus-run.jar`.
 
 With GraalVM installed, you can also create a native executable binary: `./mvnw clean package -Dnative`.
 Depending on your system, that will take some time.
@@ -395,7 +395,7 @@ Depending on your system, that will take some time.
 If you are using the `quarkus-smallrye-health` extension, `quarkus-neo4j` will automatically add a readiness health check
 to validate the connection to Neo4j.
 
-So when you access the `/health/ready` endpoint of your application you will have information about the connection validation status.
+So when you access the `/q/health/ready` endpoint of your application you will have information about the connection validation status.
 
 This behavior can be disabled by setting the `quarkus.neo4j.health.enabled` property to `false` in your `application.properties`.
 

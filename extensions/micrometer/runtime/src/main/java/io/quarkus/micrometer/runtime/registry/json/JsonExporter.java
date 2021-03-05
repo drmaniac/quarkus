@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *    https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -86,15 +86,25 @@ public class JsonExporter {
     }
 
     private Map<String, JsonValue> exportGauges(Collection<Gauge> gauges) {
-        return gauges.stream()
-                .collect(Collectors.toMap(gauge -> createExportKey(gauge.getId()),
-                        gauge -> JSON_PROVIDER.createValue(gauge.value())));
+        Map<String, JsonValue> result = new HashMap<String, JsonValue>(gauges.size());
+        for (Gauge g : gauges) {
+            double value = g.value();
+            if (Double.isFinite(value)) {
+                result.put(createExportKey(g.getId()), JSON_PROVIDER.createValue(value));
+            }
+        }
+        return result;
     }
 
     private Map<String, JsonValue> exportTimeGauges(Collection<TimeGauge> timeGauges) {
-        return timeGauges.stream()
-                .collect(Collectors.toMap(gauge -> createExportKey(gauge.getId()),
-                        gauge -> JSON_PROVIDER.createValue(gauge.value())));
+        Map<String, JsonValue> result = new HashMap<String, JsonValue>(timeGauges.size());
+        for (TimeGauge g : timeGauges) {
+            double value = g.value();
+            if (Double.isFinite(value)) {
+                result.put(createExportKey(g.getId()), JSON_PROVIDER.createValue(value));
+            }
+        }
+        return result;
     }
 
     private Map<String, JsonValue> exportCounters(Collection<Counter> counters) {
@@ -209,7 +219,7 @@ public class JsonExporter {
         } else {
             return ";" + tags.stream()
                     .map(tag -> tag.getKey() + "=" + tag.getValue()
-                            .replaceAll(";", "_"))
+                            .replace(";", "_"))
                     .collect(Collectors.joining(";"));
         }
     }

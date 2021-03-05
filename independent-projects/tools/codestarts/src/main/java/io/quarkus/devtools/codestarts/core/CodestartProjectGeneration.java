@@ -34,24 +34,28 @@ final class CodestartProjectGeneration {
 
         log.debug("processed shared-data: %s" + data);
 
-        projectDefinition.getRequiredCodestart(CodestartType.PROJECT);
+        final Codestart projectCodestart = projectDefinition.getRequiredCodestart(CodestartType.PROJECT);
 
         final List<CodestartFileStrategy> strategies = buildStrategies(mergeStrategies(projectDefinition));
 
         log.debug("file strategies: %s", strategies);
-
         CodestartProcessor processor = new CodestartProcessor(log,
                 languageName, targetDirectory, strategies, data);
         processor.checkTargetDir();
-        for (Codestart codestart : projectDefinition.getCodestarts()) {
-            processor.process(codestart);
-        }
+
+        projectCodestart.use(project -> {
+            for (Codestart codestart : projectDefinition.getCodestarts()) {
+                processor.process(project, codestart);
+            }
+        });
+
         processor.writeFiles();
+
         log.info("\napplying codestarts...");
         log.info(projectDefinition.getCodestarts().stream()
                 .map(c -> c.getType().getIcon() + " "
                         + c.getName())
-                .collect(Collectors.joining("\n")));
+                .collect(Collectors.joining(System.lineSeparator())));
     }
 
     private static Map<String, String> mergeStrategies(CodestartProjectDefinition projectDefinition) {

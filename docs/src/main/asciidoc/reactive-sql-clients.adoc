@@ -67,7 +67,9 @@ If you are creating a new project, set the `extensions` parameter as follows:
 mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectGroupId=org.acme \
     -DprojectArtifactId=reactive-pg-client-quickstart \
-    -Dextensions="reactive-pg-client"
+    -DclassName="org.acme.vertx.FruitResource" \
+    -Dpath="/fruits" \
+    -Dextensions="resteasy,reactive-pg-client,resteasy-mutiny"
 cd reactive-pg-client-quickstart
 ----
 
@@ -578,7 +580,7 @@ MySQLPool additional2Client;
 
 The PostgreSQL and MariaDB/MySQL clients can be configured to connect to the server through a UNIX domain socket.
 
-First make sure that https://quarkus.io/guides/vertx#native-transport[native transport support] is enabled.
+First make sure that link:vertx#native-transport[native transport support] is enabled.
 
 Then configure the database connection url.
 This step depends on the database type.
@@ -613,6 +615,39 @@ In `application.properties` add:
 ----
 quarkus.datasource.reactive.url=mysql:///quarkus_test?host=/var/run/mysqld/mysqld.sock
 ----
+
+== TCP Connection `idle-timeout`
+
+Reactive datasources can be configured with an `idle-timeout` (in milliseconds) that applies at the TCP connection level.
+
+NOTE: The `idle-timeout` is disabled by default.
+
+For example, you could expire idle connections after 60 minutes:
+
+[source,properties]
+----
+quarkus.datasource.reactive.idle-timeout=PT60M
+----
+
+[WARNING]
+====
+This timeout does not apply to the pool, but to the TCP connection.
+
+If it expires while the connection is idle in the pool, the connection is closed and removed from the pool.
+
+If it expires immediately after your borrowed the connection from the pool and before you execute a query, you will get an error.
+
+
+While this is unlikely to happen, you must be prepared for such eventuality:
+
+[source,java]
+----
+// Run a query, retry at most 3 times if it fails
+Uni<RowSet<Row>> rowSet = client.query("SELECT id, name FROM fruits ORDER BY name ASC")
+                            .execute()
+                            .onFailure().retry().atMost(3);
+----
+====
 
 == Configuration Reference
 

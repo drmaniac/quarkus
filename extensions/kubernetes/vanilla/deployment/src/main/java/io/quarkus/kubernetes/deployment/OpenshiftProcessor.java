@@ -89,6 +89,7 @@ public class OpenshiftProcessor {
         List<ConfiguratorBuildItem> result = new ArrayList<>();
         result.addAll(KubernetesCommonHelper.createPlatformConfigurators(config));
         result.addAll(KubernetesCommonHelper.createGlobalConfigurators(ports));
+        result.add(new ConfiguratorBuildItem(new ApplyExpositionConfigurator(config.route)));
 
         if (!capabilities.isPresent(Capability.CONTAINER_IMAGE_S2I)
                 && !capabilities.isPresent(Capability.CONTAINER_IMAGE_OPENSHIFT)) {
@@ -189,7 +190,7 @@ public class OpenshiftProcessor {
         // Probe port handling
         Integer port = ports.stream().filter(p -> HTTP_PORT.equals(p.getName())).map(KubernetesPortBuildItem::getPort)
                 .findFirst().orElse(DEFAULT_HTTP_PORT);
-        result.add(new DecoratorBuildItem(OPENSHIFT, new ApplyHttpGetActionPortDecorator(port)));
+        result.add(new DecoratorBuildItem(OPENSHIFT, new ApplyHttpGetActionPortDecorator(name, name, port)));
 
         // Hanlde non-s2i
         if (!capabilities.isPresent(Capability.CONTAINER_IMAGE_S2I)
@@ -199,5 +200,4 @@ public class OpenshiftProcessor {
 
         return result;
     }
-
 }

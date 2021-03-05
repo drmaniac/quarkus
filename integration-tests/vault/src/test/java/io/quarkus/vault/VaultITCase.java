@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.util.Map;
+import java.util.stream.StreamSupport;
 
 import javax.inject.Inject;
 
@@ -33,6 +34,7 @@ import org.eclipse.microprofile.config.spi.ConfigProviderResolver;
 import org.jboss.logging.Logger;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
@@ -42,7 +44,6 @@ import io.quarkus.credentials.CredentialsProvider;
 import io.quarkus.test.QuarkusUnitTest;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.vault.runtime.Base64String;
-import io.quarkus.vault.runtime.VaultManager;
 import io.quarkus.vault.runtime.client.VaultClient;
 import io.quarkus.vault.runtime.client.VaultClientException;
 import io.quarkus.vault.runtime.client.dto.VaultModel;
@@ -71,6 +72,7 @@ import io.quarkus.vault.runtime.client.dto.transit.VaultTransitVerify;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitVerifyBatchInput;
 import io.quarkus.vault.runtime.client.dto.transit.VaultTransitVerifyBody;
 import io.quarkus.vault.runtime.config.VaultAuthenticationType;
+import io.quarkus.vault.runtime.config.VaultConfigSource;
 import io.quarkus.vault.test.VaultTestExtension;
 import io.quarkus.vault.test.VaultTestLifecycleManager;
 import io.quarkus.vault.test.client.TestVaultClient;
@@ -104,6 +106,9 @@ public class VaultITCase {
     @ConfigProperty(name = MY_PASSWORD)
     String someSecretThroughIndirection;
 
+    @Inject
+    VaultClient vaultClient;
+
     @Test
     public void credentialsProvider() {
         Map<String, String> staticCredentials = credentialsProvider.getCredentials("static");
@@ -121,6 +126,14 @@ public class VaultITCase {
         Config config = ConfigProviderResolver.instance().getConfig();
         String value = config.getValue(PASSWORD_PROPERTY_NAME, String.class);
         assertEquals(DB_PASSWORD, value);
+
+        int ordinal = StreamSupport.stream(config.getConfigSources().spliterator(), false)
+                .filter(cs -> cs instanceof VaultConfigSource)
+                .findAny()
+                .orElseThrow(() -> new RuntimeException("vault config source not found"))
+                .getOrdinal();
+
+        Assertions.assertEquals(300, ordinal);
     }
 
     @Test
@@ -150,8 +163,6 @@ public class VaultITCase {
 
     @Test
     public void httpclient() {
-
-        VaultClient vaultClient = VaultManager.getInstance().getVaultClient();
 
         String anotherWrappingToken = System.getProperty("vault-test.another-password-kv-v2-wrapping-token");
         VaultKvSecretV2 unwrap = vaultClient.unwrap(anotherWrappingToken, VaultKvSecretV2.class);

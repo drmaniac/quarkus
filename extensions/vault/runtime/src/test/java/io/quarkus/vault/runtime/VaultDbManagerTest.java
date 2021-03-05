@@ -12,35 +12,43 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.runtime.TlsConfig;
-import io.quarkus.vault.runtime.client.OkHttpVaultClient;
+import io.quarkus.vault.runtime.client.VaultClient;
 import io.quarkus.vault.runtime.client.VaultClientException;
+import io.quarkus.vault.runtime.client.VertxVaultClient;
 import io.quarkus.vault.runtime.client.dto.database.VaultDatabaseCredentials;
 import io.quarkus.vault.runtime.client.dto.database.VaultDatabaseCredentialsData;
 import io.quarkus.vault.runtime.client.dto.sys.VaultLeasesLookup;
 import io.quarkus.vault.runtime.client.dto.sys.VaultRenewLease;
 import io.quarkus.vault.runtime.config.VaultAppRoleAuthenticationConfig;
 import io.quarkus.vault.runtime.config.VaultAuthenticationConfig;
+import io.quarkus.vault.runtime.config.VaultBootstrapConfig;
 import io.quarkus.vault.runtime.config.VaultKubernetesAuthenticationConfig;
-import io.quarkus.vault.runtime.config.VaultRuntimeConfig;
 import io.quarkus.vault.runtime.config.VaultTlsConfig;
 import io.quarkus.vault.runtime.config.VaultUserpassAuthenticationConfig;
 
 public class VaultDbManagerTest {
 
-    VaultRuntimeConfig config = createConfig();
+    VaultBootstrapConfig config = createConfig();
     TlsConfig tlsConfig = new TlsConfig();
     VaultDatabaseCredentials credentials = new VaultDatabaseCredentials();
     VaultLeasesLookup vaultLeasesLookup = new VaultLeasesLookup();
     AtomicBoolean lookupLeaseShouldReturn400 = new AtomicBoolean(false);
     VaultRenewLease vaultRenewLease = new VaultRenewLease();
-    OkHttpVaultClient vaultClient = createVaultClient();
-    VaultAuthManager vaultAuthManager = new VaultAuthManager(vaultClient, config);
-    VaultDbManager vaultDbManager = new VaultDbManager(vaultAuthManager, vaultClient, config);
+    VaultConfigHolder vaultConfigHolder = new VaultConfigHolder().setVaultBootstrapConfig(config);
+    VaultClient vaultClient = createVaultClient();
+    VaultAuthManager vaultAuthManager = new VaultAuthManager(vaultConfigHolder, vaultClient);
+    VaultDbManager vaultDbManager = new VaultDbManager(vaultConfigHolder, vaultAuthManager, vaultClient);
     String mydbrole = "mydbrole";
     String mylease = "mylease";
+
+    @AfterEach
+    public void after() {
+        vaultClient.close();
+    }
 
     @Test
     public void getDynamicDbCredentials() {
@@ -95,9 +103,9 @@ public class VaultDbManagerTest {
         assertEquals("sinclair5", properties.get(PASSWORD_PROPERTY_NAME), "reaching max-ttl");
     }
 
-    private VaultRuntimeConfig createConfig() {
+    private VaultBootstrapConfig createConfig() {
         try {
-            VaultRuntimeConfig config = new VaultRuntimeConfig();
+            VaultBootstrapConfig config = new VaultBootstrapConfig();
             config.tls = new VaultTlsConfig();
             config.authentication = new VaultAuthenticationConfig();
             config.authentication.kubernetes = new VaultKubernetesAuthenticationConfig();
@@ -124,8 +132,8 @@ public class VaultDbManagerTest {
         }
     }
 
-    private OkHttpVaultClient createVaultClient() {
-        return new OkHttpVaultClient(config, tlsConfig) {
+    private VaultClient createVaultClient() {
+        VertxVaultClient vaultClient = new VertxVaultClient(vaultConfigHolder, tlsConfig) {
             @Override
             public VaultDatabaseCredentials generateDatabaseCredentials(String token, String databaseCredentialsRole) {
                 return credentials;
@@ -144,6 +152,7 @@ public class VaultDbManagerTest {
                 return vaultRenewLease;
             }
         };
+        vaultClient.init();
+        return vaultClient;
     }
-
 }

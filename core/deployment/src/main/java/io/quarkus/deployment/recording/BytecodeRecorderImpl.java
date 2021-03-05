@@ -624,7 +624,10 @@ public class BytecodeRecorderImpl implements RecorderContext {
 
                     @Override
                     ResultHandle createValue(MethodContext context, MethodCreator method, ResultHandle array) {
-                        return method.invokeStaticMethod(ofMethod(Optional.class, "of", Optional.class, Object.class),
+                        // If the value is a proxy, it may be non-null at build time but become null
+                        // when we actually create the value during initialization;
+                        // so we need to use 'ofNullable' and not 'of' here.
+                        return method.invokeStaticMethod(ofMethod(Optional.class, "ofNullable", Optional.class, Object.class),
                                 context.loadDeferred(res));
                     }
                 };
@@ -1107,7 +1110,9 @@ public class BytecodeRecorderImpl implements RecorderContext {
         if (param instanceof Collection) {
             //if this is a collection we want to serialize every element
             for (Object i : (Collection) param) {
-                DeferredParameter val = loadObjectInstance(i, existing, i.getClass(), relaxedValidation);
+                DeferredParameter val = i != null
+                        ? loadObjectInstance(i, existing, i.getClass(), relaxedValidation)
+                        : loadObjectInstance(null, existing, Object.class, relaxedValidation);
                 setupSteps.add(new SerialzationStep() {
                     @Override
                     public void handle(MethodContext context, MethodCreator method, DeferredArrayStoreParameter out) {

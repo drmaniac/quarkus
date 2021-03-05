@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 
+import javax.inject.Singleton;
+
 import org.jboss.jandex.AnnotationInstance;
 import org.jboss.jandex.AnnotationTarget;
 import org.jboss.jandex.ClassInfo;
@@ -23,11 +25,15 @@ import io.micrometer.core.instrument.config.NamingConvention;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.AnnotationsTransformerBuildItem;
 import io.quarkus.arc.deployment.BeanContainerBuildItem;
+import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
 import io.quarkus.arc.deployment.UnremovableBeanBuildItem;
 import io.quarkus.arc.processor.AnnotationsTransformer;
 import io.quarkus.arc.processor.DotNames;
 import io.quarkus.deployment.Feature;
-import io.quarkus.deployment.annotations.*;
+import io.quarkus.deployment.annotations.BuildProducer;
+import io.quarkus.deployment.annotations.BuildStep;
+import io.quarkus.deployment.annotations.ExecutionTime;
+import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.ShutdownContextBuildItem;
@@ -44,9 +50,14 @@ import io.quarkus.micrometer.runtime.MicrometerCountedInterceptor;
 import io.quarkus.micrometer.runtime.MicrometerRecorder;
 import io.quarkus.micrometer.runtime.MicrometerTimed;
 import io.quarkus.micrometer.runtime.MicrometerTimedInterceptor;
+import io.quarkus.micrometer.runtime.binder.HttpBinderConfiguration;
 import io.quarkus.micrometer.runtime.config.MicrometerConfig;
+import io.quarkus.micrometer.runtime.config.runtime.HttpClientConfig;
+import io.quarkus.micrometer.runtime.config.runtime.HttpServerConfig;
+import io.quarkus.micrometer.runtime.config.runtime.VertxConfig;
 import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.metrics.MetricsFactory;
+import io.quarkus.vertx.http.deployment.NonApplicationRootPathBuildItem;
 
 public class MicrometerProcessor {
     private static final DotName METER_REGISTRY = DotName.createSimple(MeterRegistry.class.getName());
@@ -69,6 +80,31 @@ public class MicrometerProcessor {
         }
     }
 
+    public static class HttpBinderEnabled implements BooleanSupplier {
+        MicrometerConfig mConfig;
+
+        public boolean getAsBoolean() {
+            return mConfig.checkBinderEnabledWithDefault(mConfig.binder.httpServer) ||
+                    mConfig.checkBinderEnabledWithDefault(mConfig.binder.httpClient);
+        }
+    }
+
+    public static class HttpServerBinderEnabled implements BooleanSupplier {
+        MicrometerConfig mConfig;
+
+        public boolean getAsBoolean() {
+            return mConfig.checkBinderEnabledWithDefault(mConfig.binder.httpServer);
+        }
+    }
+
+    public static class HttpClientBinderEnabled implements BooleanSupplier {
+        MicrometerConfig mConfig;
+
+        public boolean getAsBoolean() {
+            return mConfig.checkBinderEnabledWithDefault(mConfig.binder.httpClient);
+        }
+    }
+
     MicrometerConfig mConfig;
 
     @BuildStep(onlyIf = MicrometerEnabled.class)
@@ -78,14 +114,15 @@ public class MicrometerProcessor {
 
     @BuildStep(onlyIf = MicrometerEnabled.class, onlyIfNot = PrometheusRegistryProcessor.PrometheusEnabled.class)
     MetricsCapabilityBuildItem metricsCapabilityBuildItem() {
-        return new MetricsCapabilityBuildItem(x -> MetricsFactory.MICROMETER.equals(x),
+        return new MetricsCapabilityBuildItem(MetricsFactory.MICROMETER::equals,
                 null);
     }
 
     @BuildStep(onlyIf = { MicrometerEnabled.class, PrometheusRegistryProcessor.PrometheusEnabled.class })
-    MetricsCapabilityBuildItem metricsCapabilityPrometheusBuildItem() {
-        return new MetricsCapabilityBuildItem(x -> MetricsFactory.MICROMETER.equals(x),
-                mConfig.export.prometheus.path);
+    MetricsCapabilityBuildItem metricsCapabilityPrometheusBuildItem(
+            NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem) {
+        return new MetricsCapabilityBuildItem(MetricsFactory.MICROMETER::equals,
+                nonApplicationRootPathBuildItem.resolvePath(mConfig.export.prometheus.path));
     }
 
     @BuildStep(onlyIf = MicrometerEnabled.class)
@@ -161,6 +198,11 @@ public class MicrometerProcessor {
 
         reflectiveClasses.produce(createReflectiveBuildItem(COUNTED_ANNOTATION, index));
         reflectiveClasses.produce(createReflectiveBuildItem(TIMED_ANNOTATION, index));
+        reflectiveClasses.produce(ReflectiveClassBuildItem
+                .builder("org.HdrHistogram.Histogram",
+                        "org.HdrHistogram.DoubleHistogram",
+                        "org.HdrHistogram.ConcurrentHistogram")
+                .constructors(true).build());
 
         return new UnremovableBeanBuildItem(new UnremovableBeanBuildItem.BeanClassNamesExclusion(keepMe));
     }
@@ -175,6 +217,24 @@ public class MicrometerProcessor {
     void processAnnotatedMetrics(BuildProducer<AnnotationsTransformerBuildItem> annotationsTransformers) {
         annotationsTransformers.produce(createAnnotationTransformer(COUNTED_ANNOTATION, COUNTED_BINDING));
         annotationsTransformers.produce(createAnnotationTransformer(TIMED_ANNOTATION, TIMED_BINDING));
+    }
+
+    @BuildStep(onlyIf = { MicrometerEnabled.class })
+    @Record(ExecutionTime.RUNTIME_INIT)
+    SyntheticBeanBuildItem enableHttpBinders(MicrometerRecorder recorder,
+            HttpServerConfig serverConfig,
+            HttpClientConfig clientConfig,
+            VertxConfig vertxConfig) {
+        return SyntheticBeanBuildItem
+                .configure(HttpBinderConfiguration.class)
+                .scope(Singleton.class)
+                .setRuntimeInit()
+                .unremovable()
+                .runtimeValue(recorder.configureHttpMetrics(
+                        mConfig.checkBinderEnabledWithDefault(mConfig.binder.httpServer),
+                        mConfig.checkBinderEnabledWithDefault(mConfig.binder.httpClient),
+                        serverConfig, clientConfig, vertxConfig))
+                .done();
     }
 
     @BuildStep(onlyIf = MicrometerEnabled.class)
@@ -249,6 +309,7 @@ public class MicrometerProcessor {
                     break;
                 case TYPE:
                     classes.add(target.asClass().name().toString());
+                    break;
                 default:
                     break;
             }

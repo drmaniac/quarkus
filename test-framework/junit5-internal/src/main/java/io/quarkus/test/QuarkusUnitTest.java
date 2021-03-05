@@ -47,6 +47,7 @@ import org.junit.jupiter.api.extension.TestInstantiationException;
 import io.quarkus.bootstrap.app.CuratedApplication;
 import io.quarkus.bootstrap.app.QuarkusBootstrap;
 import io.quarkus.bootstrap.app.RunningQuarkusApplication;
+import io.quarkus.bootstrap.classloading.ClassLoaderEventListener;
 import io.quarkus.bootstrap.classloading.ClassPathElement;
 import io.quarkus.bootstrap.classloading.QuarkusClassLoader;
 import io.quarkus.bootstrap.model.AppArtifact;
@@ -112,6 +113,7 @@ public class QuarkusUnitTest
     private String[] commandLineParameters = new String[0];
 
     private boolean allowTestClassOutsideDeployment;
+    private List<ClassLoaderEventListener> classLoadListeners = new ArrayList<>();
 
     public QuarkusUnitTest setExpectedException(Class<? extends Throwable> expectedException) {
         return assertException(t -> {
@@ -162,6 +164,11 @@ public class QuarkusUnitTest
 
     public QuarkusUnitTest addBuildChainCustomizer(Consumer<BuildChainBuilder> customizer) {
         this.buildChainCustomizers.add(customizer);
+        return this;
+    }
+
+    public QuarkusUnitTest addClassLoaderEventListener(ClassLoaderEventListener listener) {
+        this.classLoadListeners.add(listener);
         return this;
     }
 
@@ -417,7 +424,9 @@ public class QuarkusUnitTest
                     }
                 });
             } catch (ClassNotFoundException e) {
-                //ignore
+                System.err.println("Couldn't make the test class " + testClass.getSimpleName() + " an unremovable bean"
+                        + " (probably because a dependency on io.quarkus:quarkus-arc-deployment is missing);"
+                        + " other beans may also be removed and injection may not work as expected");
             }
 
             final Path testLocation = PathTestHelper.getTestClassesLocation(testClass);
@@ -440,11 +449,13 @@ public class QuarkusUnitTest
                             .setBaseClassLoader(
                                     QuarkusClassLoader
                                             .builder("QuarkusUnitTest ClassLoader", getClass().getClassLoader(), false)
+                                            .addClassLoaderEventListeners(this.classLoadListeners)
                                             .addBannedElement(ClassPathElement.fromPath(testLocation)).build());
                 }
+                builder.addClassLoaderEventListeners(this.classLoadListeners);
                 curatedApplication = builder.build().bootstrap();
 
-                runningQuarkusApplication = new AugmentActionImpl(curatedApplication, customizers)
+                runningQuarkusApplication = new AugmentActionImpl(curatedApplication, customizers, classLoadListeners)
                         .createInitialRuntimeApplication()
                         .run(commandLineParameters);
                 //we restore the CL at the end of the test

@@ -46,10 +46,6 @@
             <artifactId>quarkus-platform-descriptor-json</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-platform-descriptor-resolver-json</artifactId>
-        </dependency>
-        <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
             <scope>test</scope>
@@ -192,6 +188,18 @@
             <activation>
                 <property>
                     <name>quickly</name>
+                </property>
+            </activation>
+            <properties>
+                <gradle.task>assemble</gradle.task>
+            </properties>
+        </profile>
+        <profile>
+            <!-- separate "quickly" profile for CI to keep local "quickly" demands separated from CI demands -->
+            <id>quick-build-ci</id>
+            <activation>
+                <property>
+                    <name>quickly-ci</name>
                 </property>
             </activation>
             <properties>

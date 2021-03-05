@@ -241,7 +241,7 @@ mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectArtifactId=vault-quickstart \
     -DclassName="org.acme.quickstart.GreetingResource" \
     -Dpath="/hello" \
-    -Dextensions="vault"
+    -Dextensions="resteasy,vault"
 cd vault-quickstart
 ----
 
@@ -306,7 +306,7 @@ Now compile the application and run it:
 [source,bash]
 ----
 ./mvnw clean install
-java -jar target/vault-quickstart-1.0-SNAPSHOT-runner.jar
+java -jar target/quarkus-app/quarkus-run.jar
 ----
 
 Finally test the new endpoint:
@@ -322,6 +322,13 @@ You should see:
 ----
 123456
 ----
+
+[NOTE]
+====
+The MicroProfile _Vault Config Source_ is configured with ordinal `270`, which is higher than the file system
+or jar ordinals, but lower than environment variables.
+This value can be changed using property `quarkus.vault.config-ordinal`.
+====
 
 == Programmatic access to the KV secret engine
 
@@ -408,7 +415,7 @@ boolean valid = vaultTOTPSecretEngine.validateCode("my_key_2", keyCode); // <4>
 If you are using the `quarkus-smallrye-health` extension, `quarkus-vault` can add a readiness health check
 to validate the connection to the Vault server. This is disabled by default.
 
-If enabled, when you access the `/health/ready` endpoint of your application you will have information about the connection validation status.
+If enabled, when you access the `/q/health/ready` endpoint of your application you will have information about the connection validation status.
 
 This behavior can be enabled by setting the `quarkus.vault.health.enabled` property to `true` in your `application.properties`.
 

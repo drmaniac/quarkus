@@ -24,7 +24,8 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
     private boolean suspended = false;
     private volatile boolean requestScopeActivated = false;
     private volatile boolean running = false;
-    private volatile Executor executor;
+    private volatile Executor executor; // ephemerally set by handlers to signal that we resume, it needs to be on this executor
+    private volatile Executor lastExecutor; // contains the last executor which was provided during resume - needed to submit there if suspended again
     private Map<String, Object> properties;
     private final ThreadSetupAction requestContext;
     private ThreadSetupAction.ThreadState currentRequestScope;
@@ -55,11 +56,19 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
             this.executor = executor;
             if (executor == null) {
                 suspended = false;
+            } else {
+                this.lastExecutor = executor;
             }
         } else {
             suspended = false;
             if (executor == null) {
-                getEventLoop().execute(this);
+                if (lastExecutor == null) {
+                    getEventLoop().execute(this);
+                } else {
+                    // we need to do this to ensure that if we suspended while not on the event-loop,
+                    // that we come back on a thread from this executor
+                    lastExecutor.execute(this);
+                }
             } else {
                 executor.execute(this);
             }
@@ -116,11 +125,16 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
                                     }
                                     requestScopeActivated = false;
                                 }
+                            } else {
+                                requestScopeActivated = false;
+                                requestScopeDeactivated();
                             }
                             if (this.executor != null) {
                                 //resume happened in the meantime
                                 suspended = false;
                                 exec = this.executor;
+                                // prevent future suspensions from re-submitting the task
+                                this.executor = null;
                             } else if (suspended) {
                                 running = false;
                                 return;
@@ -153,8 +167,8 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
                 close();
             } else {
                 if (disasociateRequestScope) {
-                    currentRequestScope.deactivate();
                     requestScopeDeactivated();
+                    currentRequestScope.deactivate();
                 }
                 beginAsyncProcessing();
             }
@@ -177,12 +191,16 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
             return;
         }
         requestScopeActivated = true;
-        if (currentRequestScope == null) {
-            currentRequestScope = requestContext.activateInitial();
-            handleRequestScopeActivation();
+        if (isRequestScopeManagementRequired()) {
+            if (currentRequestScope == null) {
+                currentRequestScope = requestContext.activateInitial();
+            } else {
+                currentRequestScope.activate();
+            }
         } else {
-            currentRequestScope.activate();
+            currentRequestScope = requestContext.currentState();
         }
+        handleRequestScopeActivation();
     }
 
     protected abstract void handleRequestScopeActivation();
@@ -221,15 +239,6 @@ public abstract class AbstractResteasyReactiveContext<T extends AbstractResteasy
 
     public T setRunning(boolean running) {
         this.running = running;
-        return (T) this;
-    }
-
-    public Executor getExecutor() {
-        return executor;
-    }
-
-    public T setExecutor(Executor executor) {
-        this.executor = executor;
         return (T) this;
     }
 

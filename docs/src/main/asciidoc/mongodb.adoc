@@ -48,7 +48,7 @@ mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectArtifactId=mongodb-quickstart \
     -DclassName="org.acme.mongodb.FruitResource" \
     -Dpath="/fruits" \
-    -Dextensions="resteasy-jackson,mongodb-client,resteasy-mutiny,context-propagation"
+    -Dextensions="resteasy,resteasy-jackson,mongodb-client,resteasy-mutiny,context-propagation"
 cd mongodb-quickstart
 ----
 
@@ -584,7 +584,7 @@ The link:mongodb-panache[MongoDB with Panache] extension facilitates the usage o
 If you are using the `quarkus-smallrye-health` extension, `quarkus-mongodb-client` will automatically add a readiness health check
 to validate the connection to the cluster.
 
-So when you access the `/health/ready` endpoint of your application you will have information about the connection validation status.
+So when you access the `/q/health/ready` endpoint of your application you will have information about the connection validation status.
 
 This behavior can be disabled by setting the `quarkus.mongodb.health.enabled` property to `false` in your `application.properties`.
 
@@ -593,7 +593,7 @@ This behavior can be disabled by setting the `quarkus.mongodb.health.enabled` pr
 If you are using the `quarkus-micrometer` or `quarkus-smallrye-metrics` extension, `quarkus-mongodb-client` can provide metrics about the connection pools.
 This behavior must first be enabled by setting the `quarkus.mongodb.metrics.enabled` property to `true` in your `application.properties`.
 
-So when you access the `/metrics` endpoint of your application you will have information about the connection pool status.
+So when you access the `/q/metrics` endpoint of your application you will have information about the connection pool status.
 When using link:microprofile-metrics[SmallRye Metrics], connection pool metrics will be available under the `vendor` scope.
 
 
@@ -626,7 +626,7 @@ quarkus.mongodb.tls-insecure=true # only if TLS certificate cannot be validated
 
 You can then build a native executable with the usual command `./mvnw package -Pnative`.
 
-Running it is as simple as executing `./target/mongodb-quickstart-1.0-SNAPSHOT-runner`.
+Running it is as simple as executing `./target/mongodb-quickstart-1.0.0-SNAPSHOT-runner`.
 
 You can then point your browser to `http://localhost:8080/fruits.html` and use your application.
 

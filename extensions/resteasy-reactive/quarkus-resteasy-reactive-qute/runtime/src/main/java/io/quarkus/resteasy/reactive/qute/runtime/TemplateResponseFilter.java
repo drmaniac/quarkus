@@ -1,7 +1,8 @@
 package io.quarkus.resteasy.reactive.qute.runtime;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Locale;
 
 import javax.ws.rs.container.ContainerResponseContext;
 import javax.ws.rs.core.MediaType;
@@ -11,59 +12,55 @@ import org.jboss.resteasy.reactive.server.spi.ResteasyReactiveContainerRequestCo
 
 import io.quarkus.qute.TemplateInstance;
 import io.quarkus.qute.Variant;
+import io.smallrye.mutiny.Uni;
 
 public class TemplateResponseFilter {
 
+    @SuppressWarnings("unchecked")
     @ServerResponseFilter
-    public void filter(ResteasyReactiveContainerRequestContext requestContext, ContainerResponseContext responseContext) {
+    public Uni<Void> filter(ResteasyReactiveContainerRequestContext requestContext, ContainerResponseContext responseContext) {
         Object entity = responseContext.getEntity();
         if (!(entity instanceof TemplateInstance)) {
-            return;
+            return null;
         }
 
-        requestContext.suspend();
         MediaType mediaType;
         TemplateInstance instance = (TemplateInstance) entity;
         Object variantsAttr = instance.getAttribute(TemplateInstance.VARIANTS);
         if (variantsAttr != null) {
-            @SuppressWarnings("unchecked")
-            List<Variant> variants = (List<Variant>) variantsAttr;
+            List<javax.ws.rs.core.Variant> variants = new ArrayList<>();
+            for (Variant variant : (List<Variant>) variantsAttr) {
+                variants.add(new javax.ws.rs.core.Variant(MediaType.valueOf(variant.getMediaType()), variant.getLocale(),
+                        variant.getEncoding()));
+            }
             javax.ws.rs.core.Variant selected = requestContext.getRequest()
-                    .selectVariant(variants.stream()
-                            .map(v -> new javax.ws.rs.core.Variant(MediaType.valueOf(v.getMediaType()), v.getLocale(),
-                                    v.getEncoding()))
-                            .collect(Collectors.toList()));
+                    .selectVariant(variants);
+
             if (selected != null) {
+                Locale selectedLocale = selected.getLanguage();
+                if (selectedLocale == null) {
+                    List<Locale> acceptableLocales = requestContext.getAcceptableLanguages();
+                    if (!acceptableLocales.isEmpty()) {
+                        selectedLocale = acceptableLocales.get(0);
+                    }
+                }
                 instance.setAttribute(TemplateInstance.SELECTED_VARIANT,
-                        new Variant(selected.getLanguage(), selected.getMediaType().toString(), selected.getEncoding()));
+                        new Variant(selectedLocale, selected.getMediaType().toString(), selected.getEncoding()));
                 mediaType = selected.getMediaType();
             } else {
-                // TODO we should use the default
-                mediaType = null;
+                mediaType = responseContext.getMediaType();
             }
         } else {
-            // TODO how to get media type from non-variant templates?
-            mediaType = null;
+            mediaType = responseContext.getMediaType();
         }
 
-        try {
-            instance.renderAsync()
-                    .whenComplete((r, t) -> {
-                        if (t == null) {
-                            // make sure we avoid setting a null media type because that causes
-                            // an NPE further down
-                            if (mediaType != null) {
-                                responseContext.setEntity(r, null, mediaType);
-                            } else {
-                                responseContext.setEntity(r);
-                            }
-                            requestContext.resume();
-                        } else {
-                            requestContext.resume(t);
-                        }
-                    });
-        } catch (Throwable t) {
-            requestContext.resume(t);
-        }
+        return instance.createUni().chain(r -> {
+            if (mediaType != null) {
+                responseContext.setEntity(r, null, mediaType);
+            } else {
+                responseContext.setEntity(r);
+            }
+            return Uni.createFrom().nullItem();
+        });
     }
 }

@@ -56,7 +56,7 @@ mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectArtifactId=elasticsearch-quickstart \
     -DclassName="org.acme.elasticsearch.FruitResource" \
     -Dpath="/fruits" \
-    -Dextensions="resteasy-jackson,elasticsearch-rest-client"
+    -Dextensions="resteasy,resteasy-jackson,elasticsearch-rest-client"
 cd elasticsearch-quickstart
 ----
 
@@ -260,6 +260,52 @@ quarkus.elasticsearch.hosts = localhost:9200
 
 If you need a more advanced configuration, you can find the comprehensive list of supported configuration properties at the end of this guide.
 
+== Programmatically Configuring Elasticsearch
+On top of the parametric configuration, you can also programmatically apply additional configuration to the client by implementing a `RestClientBuilder.HttpClientConfigCallback` and annotating it with `ElasticsearchClientConfig`. You may provide multiple implementations and configuration provided by each implementation will be applied in a randomly ordered cascading manner.
+
+For example, when accessing an Elasticsearch cluster that is set up for TLS on the HTTP layer, the client needs to trust the certificate that Elasticsearch is using. The following is an example of setting up the client to trust the CA that has signed the certificate that Elasticsearch is using, when that CA certificate is available in a PKCS#12 keystore.
+
+[source,java]
+----
+import io.quarkus.elasticsearch.restclient.lowlevel.ElasticsearchClientConfig;
+import org.apache.http.impl.nio.client.HttpAsyncClientBuilder;
+import org.apache.http.ssl.SSLContextBuilder;
+import org.apache.http.ssl.SSLContexts;
+import org.elasticsearch.client.RestClientBuilder;
+
+import javax.enterprise.context.Dependent;
+import javax.net.ssl.SSLContext;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.KeyStore;
+
+@ElasticsearchClientConfig
+@Dependent
+public class SSLContextConfigurator implements RestClientBuilder.HttpClientConfigCallback {
+    @Override
+    public HttpAsyncClientBuilder customizeHttpClient(HttpAsyncClientBuilder httpClientBuilder) {
+        try {
+            String keyStorePass = "password-for-keystore";
+            Path trustStorePath = Paths.get("/path/to/truststore.p12");
+            KeyStore truststore = KeyStore.getInstance("pkcs12");
+            try (InputStream is = Files.newInputStream(trustStorePath)) {
+                truststore.load(is, keyStorePass.toCharArray());
+            }
+            SSLContextBuilder sslBuilder = SSLContexts.custom()
+                    .loadTrustMaterial(truststore, null);
+            SSLContext sslContext = sslBuilder.build();
+            httpClientBuilder.setSSLContext(sslContext);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        return httpClientBuilder;
+    }
+}
+----
+See https://www.elastic.co/guide/en/elasticsearch/client/java-rest/current/_encrypted_communication.html[Elasticsearch documentation] for more details on this particular example.
 
 == Running an Elasticsearch cluster
 
@@ -391,7 +437,7 @@ If you're interested in it, you can read the link:hibernate-search-orm-elasticse
 If you are using the `quarkus-smallrye-health` extension, both the extension will automatically add a readiness health check
 to validate the health of the cluster.
 
-So when you access the `/health/ready` endpoint of your application you will have information about the cluster status.
+So when you access the `/q/health/ready` endpoint of your application you will have information about the cluster status.
 It uses the cluster health endpoint, the check will be down if the status of the cluster is **red**, or the cluster is not available.
 
 This behavior can be disabled by setting the `quarkus.elasticsearch.health.enabled` property to `false` in your `application.properties`.
@@ -402,7 +448,7 @@ You can use both clients in a native executable.
 
 You can build a native executable with the usual command `./mvnw package -Pnative`.
 
-Running it is as simple as executing `./target/elasticsearch-low-level-client-quickstart-1.0-SNAPSHOT-runner`.
+Running it is as simple as executing `./target/elasticsearch-low-level-client-quickstart-1.0.0-SNAPSHOT-runner`.
 
 You can then point your browser to `http://localhost:8080/fruits.html` and use your application.
 

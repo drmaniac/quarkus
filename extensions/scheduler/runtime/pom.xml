@@ -39,6 +39,12 @@
             <groupId>org.glassfish</groupId>
             <artifactId>jakarta.el</artifactId>
         </dependency>
+        <!-- DEV console dependencies -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-vertx-http</artifactId>
+            <optional>true</optional>
+        </dependency>
     </dependencies>
 
     <build>

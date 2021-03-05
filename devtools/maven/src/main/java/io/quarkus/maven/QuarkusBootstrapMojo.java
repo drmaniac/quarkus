@@ -53,11 +53,8 @@ public abstract class QuarkusBootstrapMojo extends AbstractMojo {
     @Parameter(defaultValue = "${project.build.finalName}")
     private String finalName;
 
-    @Parameter(property = "uberJar", defaultValue = "false")
-    private boolean uberJar;
-
     /**
-     * When using the uberJar option, this array specifies entries that should
+     * When building an uber-jar, this array specifies entries that should
      * be excluded from the final jar. The entries are relative to the root of
      * the file. An example of this configuration could be:
      * <code><pre>
@@ -142,10 +139,6 @@ public abstract class QuarkusBootstrapMojo extends AbstractMojo {
 
     protected String[] ignoredEntries() {
         return ignoredEntries;
-    }
-
-    protected boolean uberJar() {
-        return uberJar;
     }
 
     protected AppArtifactKey projectId() {

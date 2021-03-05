@@ -6,6 +6,7 @@ import io.quarkus.oidc.AuthorizationCodeTokens;
 import io.quarkus.oidc.OidcTenantConfig;
 import io.quarkus.oidc.TokenStateManager;
 import io.vertx.core.http.Cookie;
+import io.vertx.core.http.impl.ServerCookie;
 import io.vertx.ext.web.RoutingContext;
 
 @ApplicationScoped
@@ -39,6 +40,21 @@ public class DefaultTokenStateManager implements TokenStateManager {
                             routingContext.get(CodeAuthenticationMechanism.SESSION_MAX_AGE_PARAM));
                 }
             }
+        } else if (oidcConfig.tokenStateManager.strategy == OidcTenantConfig.TokenStateManager.Strategy.ID_REFRESH_TOKENS) {
+            if (!oidcConfig.tokenStateManager.splitTokens) {
+                sb.append(CodeAuthenticationMechanism.COOKIE_DELIM)
+                        .append("")
+                        .append(CodeAuthenticationMechanism.COOKIE_DELIM)
+                        .append(tokens.getRefreshToken());
+            } else {
+                if (tokens.getRefreshToken() != null) {
+                    CodeAuthenticationMechanism.createCookie(routingContext,
+                            oidcConfig,
+                            getRefreshTokenCookieName(oidcConfig.getTenantId().get()),
+                            tokens.getRefreshToken(),
+                            routingContext.get(CodeAuthenticationMechanism.SESSION_MAX_AGE_PARAM));
+                }
+            }
         }
         return sb.toString();
     }
@@ -55,11 +71,20 @@ public class DefaultTokenStateManager implements TokenStateManager {
                 accessToken = tokens[1];
                 refreshToken = tokens[2];
             } else {
-                Cookie atCookie = routingContext.request().getCookie(getAccessTokenCookieName(oidcConfig.getTenantId().get()));
+                Cookie atCookie = getAccessTokenCookie(routingContext, oidcConfig);
                 if (atCookie != null) {
                     accessToken = atCookie.getValue();
                 }
-                Cookie rtCookie = routingContext.request().getCookie(getRefreshTokenCookieName(oidcConfig.getTenantId().get()));
+                Cookie rtCookie = getRefreshTokenCookie(routingContext, oidcConfig);
+                if (rtCookie != null) {
+                    refreshToken = rtCookie.getValue();
+                }
+            }
+        } else if (oidcConfig.tokenStateManager.strategy == OidcTenantConfig.TokenStateManager.Strategy.ID_REFRESH_TOKENS) {
+            if (!oidcConfig.tokenStateManager.splitTokens) {
+                refreshToken = tokens[2];
+            } else {
+                Cookie rtCookie = getRefreshTokenCookie(routingContext, oidcConfig);
                 if (rtCookie != null) {
                     refreshToken = rtCookie.getValue();
                 }
@@ -71,6 +96,20 @@ public class DefaultTokenStateManager implements TokenStateManager {
 
     @Override
     public void deleteTokens(RoutingContext routingContext, OidcTenantConfig oidcConfig, String tokenState) {
+        if (oidcConfig.tokenStateManager.splitTokens) {
+            CodeAuthenticationMechanism.removeCookie(routingContext, getAccessTokenCookie(routingContext, oidcConfig),
+                    oidcConfig);
+            CodeAuthenticationMechanism.removeCookie(routingContext, getRefreshTokenCookie(routingContext, oidcConfig),
+                    oidcConfig);
+        }
+    }
+
+    private static ServerCookie getAccessTokenCookie(RoutingContext routingContext, OidcTenantConfig oidcConfig) {
+        return (ServerCookie) routingContext.request().getCookie(getAccessTokenCookieName(oidcConfig.getTenantId().get()));
+    }
+
+    private static ServerCookie getRefreshTokenCookie(RoutingContext routingContext, OidcTenantConfig oidcConfig) {
+        return (ServerCookie) routingContext.request().getCookie(getRefreshTokenCookieName(oidcConfig.getTenantId().get()));
     }
 
     private static String getAccessTokenCookieName(String tenantId) {

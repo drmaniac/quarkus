@@ -4,6 +4,7 @@ import io.quarkus.agroal.spi.JdbcDriverBuildItem;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.processor.BuiltinScope;
 import io.quarkus.datasource.common.runtime.DatabaseKind;
+import io.quarkus.datasource.deployment.spi.DefaultDataSourceDbKindBuildItem;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.Feature;
@@ -13,7 +14,9 @@ import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.NativeImageEnableAllCharsetsBuildItem;
 import io.quarkus.deployment.builditem.SslNativeConfigBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageConfigBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.ServiceProviderBuildItem;
 import io.quarkus.jdbc.db2.runtime.DB2AgroalConnectionConfigurer;
+import io.quarkus.jdbc.db2.runtime.DB2ServiceBindingConverter;
 
 public class JDBCDB2Processor {
 
@@ -55,5 +58,17 @@ public class JDBCDB2Processor {
     NativeImageEnableAllCharsetsBuildItem enableAllCharsets() {
         // When connecting to DB2 on z/OS the Cp037 charset is required
         return new NativeImageEnableAllCharsetsBuildItem();
+    }
+
+    @BuildStep
+    void registerServiceBinding(Capabilities capabilities,
+            BuildProducer<ServiceProviderBuildItem> serviceProvider,
+            BuildProducer<DefaultDataSourceDbKindBuildItem> dbKind) {
+        if (capabilities.isPresent(Capability.KUBERNETES_SERVICE_BINDING)) {
+            serviceProvider.produce(
+                    new ServiceProviderBuildItem("io.quarkus.kubernetes.service.binding.runtime.ServiceBindingConverter",
+                            DB2ServiceBindingConverter.class.getName()));
+        }
+        dbKind.produce(new DefaultDataSourceDbKindBuildItem(DatabaseKind.DB2));
     }
 }

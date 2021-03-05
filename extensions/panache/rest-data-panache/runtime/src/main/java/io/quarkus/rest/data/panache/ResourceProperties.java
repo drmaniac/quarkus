@@ -16,6 +16,14 @@ import java.lang.annotation.Target;
 public @interface ResourceProperties {
 
     /**
+     * Whether this resource operations should be exposed as JAX-RS methods by default.
+     * Separate methods can override this setting by using {@link MethodProperties} annotation.
+     * <p>
+     * Default: true.
+     */
+    boolean exposed() default true;
+
+    /**
      * URL path segment that should be used to access the resources.
      * This path segment is prepended to the segments specified with the {@link MethodProperties} annotations used on this
      * resource's methods.
@@ -44,7 +52,7 @@ public @interface ResourceProperties {
     boolean hal() default false;
 
     /**
-     * Name that should be used then generating a HAL collection response.
+     * Name that should be used when generating a HAL collection response.
      * <p>
      * Default: hyphenated resource name without a suffix. Ignored suffixes are `Controller` and `Resource`.
      */

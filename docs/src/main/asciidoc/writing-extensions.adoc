@@ -17,6 +17,8 @@ Quarkus extensions add a new developer focused behavior to the core offering, an
 This means that metadata is only processed once at build time, which both saves on startup time, and also on memory
 usage as the classes etc that are used for processing are not loaded (or even present) in the runtime JVM.
 
+NOTE: This is an in-depth documentation, see the link:building-my-first-extension[building my first extension] if you need an introduction.
+
 == Extension philosophy
 
 This section is a work in progress and gathers the philosophy under which extensions should be designed and written.
@@ -467,11 +469,18 @@ You will also need to configure the `maven-compiler-plugin` to detect the `quark
 </build>
 ----
 
-==== Create new extension modules using Maven
+==== Create new Quarkus Core extension modules using Maven
 
-The `create-extension` mojo of `io.quarkus:quarkus-maven-plugin` can be used to generate stubs of Maven modules needed for implementing a new Quarkus extension.
+Quarkus provides `create-extension` Maven Mojo to initialize your extension project.
 
-WARNING: This mojo can be currently used only for adding extensions to an established source tree hosting multiple extensions in one subdirectory, such as https://github.com/quarkusio/quarkus[Quarkus] or https://github.com/apache/camel-quarkus[Camel Quarkus]. Creating extension projects from scratch is not supported yet.
+It will try to auto-detect its options:
+
+* from `quarkus` (Quarkus Core) or `quarkus/extensions` directory, it will use the 'Quarkus Core' extension layout and defaults.
+* with `-DgroupId=io.quarkiverse.[extensionId]`, it will use the 'Quarkiverse' extension layout and defaults.
+* in other cases it will use the 'Standalone' extension layout and defaults.
+* we may introduce other layout types in the future.
+
+TIP: You may not specify any parameter to use the interactive mode: `mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create-extension -N`
 
 As and example, let's add a new extension called `my-ext` to the Quarkus source tree:
 
@@ -479,12 +488,12 @@ As and example, let's add a new extension called `my-ext` to the Quarkus source 
 ----
 git clone https://github.com/quarkusio/quarkus.git
 cd quarkus
-cd extensions
 mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create-extension -N \
-    -Dquarkus.artifactIdBase=my-ext \
-    -Dquarkus.artifactIdPrefix=quarkus- \
-    -Dquarkus.nameBase="My Extension"
+    -DextensionId=my-ext \
+    -Dname="My Extension"
 ----
+
+NOTE: by default, the `groupId`, `version`, `quarkusVersion`, `namespaceId`, and `namespaceName` will be consistent with other Quarkus core extensions.
 
 The above sequence of commands does the following:
 
@@ -499,10 +508,7 @@ The above sequence of commands does the following:
 ** `quarkus-my-ext-deployment` is added to the `<dependencyManagement>` of the Quarkus BOM (Bill of Materials) `bom/application/pom.xml`
 ** `quarkus-my-ext-integration-test` is added to the `<modules>` of `quarkus-integration-tests-parent`
 
-A Maven build performed immediately after generating the modules should fail due to a `fail()` assertion in one of the test classes.
-
-There is one step (specific to the Quarkus source tree) that you should do manually when creating a new extension:
-create a `quarkus-extension.yaml` file that describe your extension inside the runtime module `src/main/resources/META-INF` folder.
+NOTE: You also have to fill the `quarkus-extension.yaml` file that describe your extension inside the runtime module `src/main/resources/META-INF` folder.
 
 This is the `quarkus-extension.yaml` of the `quarkus-agroal` extension, you can use it as an example:
 
@@ -521,29 +527,9 @@ metadata:
   status: "stable"
 ----
 
-Note that the parameters of the mojo that will be constant for all the extensions added to this source tree are configured in `extensions/pom.xml` so that they do not need to be passed on the command line each time a new extension is added:
-
-[source,xml]
-----
-<plugin>
-    <groupId>io.quarkus</groupId>
-    <artifactId>quarkus-maven-plugin</artifactId>
-    <version>${quarkus.version}</version>
-    <inherited>false</inherited>
-    <!-- Settings for stubbing new extensions via
-           ./mvnw quarkus:create-extension -N -Dquarkus.artifactIdBase=my-ext -Dquarkus.nameBase="My Extension"
-    -->
-    <configuration>
-        <namePrefix xml:space="preserve">Quarkus - </namePrefix>
-        <bomPath>../bom/application/pom.xml</bomPath>
-        <itestParentPath>../integration-tests/pom.xml</itestParentPath>
-    </configuration>
-</plugin>
-----
-
-TIP: The `nameBase` parameter of the mojo is optional.
-If you do not specify it on the command line, the plugin will derive it from `artifactIdBase` by replacing dashes with spaces and uppercasing each token.
-So you may consider omitting explicit `nameBase` in some cases.
+TIP: The `name` parameter of the mojo is optional.
+If you do not specify it on the command line, the plugin will derive it from `extensionId` by replacing dashes with spaces and uppercasing each token.
+So you may consider omitting explicit `name` in some cases.
 
 // The following link should point to the mojo page once https://github.com/quarkusio/quarkusio.github.io/issues/265 is fixed
 Please refer to https://github.com/quarkusio/quarkus/blob/{quarkus-version}/devtools/maven/src/main/java/io/quarkus/maven/CreateExtensionMojo.java[CreateExtensionMojo JavaDoc] for all the available options of the mojo.
@@ -912,18 +898,6 @@ ExecutorBuildItem createExecutor( // <2>
 <1> Note the `optional` attribute.
 <2> This example is using recorder proxies; see the section on <<bytecode-recording,bytecode recording>> for more information.
 
-==== Capabilities
-
-The `@BuildStep` annotation has a `providesCapabilities` property that can be used to provide capability information
-to other extensions about what is present in the current application. Capabilities are simply strings that are used to
-describe an extension. Capabilities should generally be named after an extensions root package, for example the transactions
-extension will provide `io.quarkus.transactions`.
-
-To check if a capability is present you can inject the `io.quarkus.deployment.Capabilities` object and call
-`isCapabilityPresent`.
-
-Capabilities should be used when checking for the presence of an extension rather than class path based checks.
-
 ==== Application Archives
 
 The `@BuildStep` annotation can also register marker files that determine which archives on the class path are considered
@@ -1092,8 +1066,9 @@ lowercased, and re-joined using hyphens (`-`).
 
 A configuration root's class name can contain an extra suffix segment for the case where there are configuration
 roots for multiple <<Configuration Root Phases>>.  Classes which correspond to the `BUILD_TIME` and `BUILD_AND_RUN_TIME_FIXED`
-may end with `BuildTimeConfig` or `BuildTimeConfiguration`, and classes which correspond to the `RUN_TIME` phase
-may end with `RuntimeConfig`, `RunTimeConfig`, `RuntimeConfiguration` or `RunTimeConfiguration`.
+may end with `BuildTimeConfig` or `BuildTimeConfiguration`, classes which correspond to the `RUN_TIME` phase
+may end with `RuntimeConfig`, `RunTimeConfig`, `RuntimeConfiguration` or `RunTimeConfiguration` while classes which correspond
+to the `BOOTSTRAP` configuration may end with `BootstrapConfig` or `BootstrapConfiguration`.
 
 Note: The current implementation is still using injection site to determine the root set, so to avoid migration problems, it
 is recommended that the injection site (field or parameter) have the same name as the configuration root class until
@@ -1127,6 +1102,13 @@ A configuration root dictates when its contained keys are read from configuratio
 | ✗
 | Appropriate for things which affect build and must be visible for run time code.  Not read from config at run time.
 
+| BOOTSTRAP
+| ✗
+| ✓
+| ✗
+| ✓
+| Used when runtime configuration needs to be obtained from an external system (like `Consul`), but details of that system need to be configurable (for example Consul's URL). The high level way this works is by using the standard Quarkus config sources (such as properties files, system properties, etc.) and producing `ConfigSourceProvider` objects which are subsequently taken into account by Quarkus when creating the final runtime `Config` object.
+
 | RUN_TIME
 | ✗
 | ✓
@@ -1137,6 +1119,8 @@ A configuration root dictates when its contained keys are read from configuratio
 |===
 
 For all cases other than the `BUILD_TIME` case, the configuration root class and all of the configuration groups and types contained therein must be located in, or reachable from, the extension's run time artifact.  Configuration roots of phase `BUILD_TIME` may be located in or reachable from either of the extension's run time or deployment artifacts.
+
+IMPORTANT: _Bootstrap_ configuration steps are executed during runtime-init *before* any of other runtime steps. This means that code executed as part of this step cannot access anything that gets initialized in runtime init steps (runtime synthetic CDI beans being one such example).
 
 ==== Configuration Example
 
@@ -1358,6 +1342,9 @@ static class IsDevMode implements BooleanSupplier {
 }
 ----
 
+If you need to make your build step conditional on the presence or absence of another extension, you can
+use <<capabilities>> for that.
+
 [id='bytecode-recording']
 === Bytecode Recording
 
@@ -1438,7 +1425,7 @@ convenience to avoid the need to explicitly load classes in the recorders.
 ==== Printing step execution time
 
 At times, it can be useful to know how the exact time each startup task (which is the result of each bytecode recording) takes when the application is run.
-The simplest way to determine this information is to set the `quarkus.debug.print-startup-times` property to `true` when running the application.
+The simplest way to determine this information is to launch the Quarkus application with the `-Dquarkus.debug.print-startup-times=true` system property.
 The output will look something like:
 
 [source%nowrap]
@@ -1465,6 +1452,58 @@ TODO: config integration
 As a CDI based runtime, Quarkus extensions often make CDI beans available as part of the extension behavior.
 However, Quarkus DI solution does not support CDI Portable Extensions.
 Instead, Quarkus extensions can make use of various link:cdi-reference[Build Time Extension Points].
+
+=== Quarkus DEV UI
+
+You can make your extension support the link:dev-ui[Quarkus DEV UI] for a greater developer experience.
+
+=== Extension-defined endpoints
+
+Your extension can add additional, non-application endpoints to be served alongside endpoints
+for Health, Metrics, OpenAPI, Swagger UI, etc. 
+
+Use a `NonApplicationRootPathBuildItem` to define an endpoint:
+
+[source%nowrap,java]
+----
+@BuildStep
+RouteBuildItem myExtensionRoute(NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem) {
+    return nonApplicationRootPathBuildItem.routeBuilder()
+                .route("custom-endpoint")
+                .handler(new MyCustomHandler())
+                .displayOnNotFoundPage()
+                .build();
+}
+----
+
+Note that the path above does not start with a '/', indicating it is a relative path. The above
+endpoint will be served relative to the configured non-application endpoint root. The non-application
+endpoint root is `/q` by default, which means the resulting endpoint will be found at `/q/custom-endpoint`. 
+
+Absolute paths are handled differently. If the above called `route("/custom-endpoint")`, the resulting 
+endpoint will be found at `/custom-endpoint`.
+
+If an extension needs nested non-application endpoints:
+
+[source%nowrap,java]
+----
+@BuildStep
+RouteBuildItem myNestedExtensionRoute(NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem) {
+    return nonApplicationRootPathBuildItem.routeBuilder()
+                .nestedRoute("custom-endpoint", "deep")
+                .handler(new MyCustomHandler())
+                .displayOnNotFoundPage()
+                .build();
+}
+----
+
+Given a default non-application endpoint root of `/q`, this will create an endpoint at `/q/custom-endpoint/deep`.
+
+Absolute paths also have an impact on nested endpoints. If the above called `nestedRoute("custom-endpoint", "/deep")`, 
+the resulting endpoint will be found at `/deep`.
+
+Refer to the link:all-config#quarkus-vertx-http_quarkus.http.non-application-root-path[Quarkus Vertx HTTP configuration reference]
+for details on how the non-application root path is configured.
 
 === Extension Health Check
 
@@ -1831,7 +1870,7 @@ public class FailingUnitTest {
 
     @Test
     public void testHealthServlet() {
-        RestAssured.when().get("/health").then().statusCode(503);                       // <4>
+        RestAssured.when().get("/q/health").then().statusCode(503);                       // <4>
     }
 
     @Test
@@ -2043,11 +2082,18 @@ The only particular aspect of writing Quarkus extensions in Eclipse is that APT 
 
 === Troubleshooting / Debugging Tips
 
-==== Dump the Generated Classes to the File System
+// This id was previously used for the "Dump the Generated Classes to the File System" section
+[[dump-the-generated-classes-to-the-file-system]]
+==== Inspecting the Generated/Transformed Classes
 
-During the augmentation phase Quarkus extensions generate new and modify existing classes for various purposes. 
-Sometimes you need to inspect the generated bytecode to debug or understand an issue.
-There are three system properties that allow you to dump the classes to the filesystem:
+Quarkus generates a lot of classes during the build phase and in many cases also transforms existing classes.
+It is often extremely useful to see the generated bytecode and transformed classes during the development of an extension.
+
+If you set the `quarkus.package.fernflower.enabled` property to `true` then Quarkus will download and invoke the https://github.com/JetBrains/intellij-community/tree/master/plugins/java-decompiler/engine[Fernflower decompiler] and dump the result in the `decompiled` directory of the build tool output (`target/decompiled` for Maven for example).
+
+NOTE: This property only works during a normal production build (i.e. not for dev mode/tests) and when `fast-jar` packaging type is used (the default behavior).
+
+There are also three system properties that allow you to dump the generated/transformed classes to the filesystem and inspect them later, for example via a decompiler in your IDE.
 
 - `quarkus.debug.generated-classes-dir` - to dump the generated classes, such as bean metadata
 - `quarkus.debug.transformed-classes-dir` - to dump the transformed classes, e.g. Panache entities
@@ -2079,7 +2125,6 @@ The property is also honored when running tests:
 ----
 
 Analogously, you can use the `quarkus.debug.transformed-classes-dir` and `quarkus.debug.transformed-classes-dir` properties to dump the relevant output.
-
 
 ==== Multi-module Maven Projects and the Development Mode
 
@@ -2141,7 +2186,7 @@ mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectArtifactId=rest-json \
     -DclassName="org.acme.rest.json.FruitResource" \
     -Dpath="/fruits" \
-    -Dextensions="resteasy-jackson"
+    -Dextensions="resteasy,resteasy-jackson"
 cd rest-json
 ----
 
@@ -2150,6 +2195,7 @@ cd rest-json
 A _capability_ represents a technical capability that can be queried by other extensions.
 An extension may provide multiple capabilities and multiple extensions can provide the same capability. 
 By default, capabilities are not displayed to users.
+Capabilities should be used when checking for the presence of an extension rather than class path based checks.
 
 Capabilities can be registered in a <<Build Step Processors>> method that produces a `CapabilityBuildItem`:
 

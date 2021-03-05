@@ -1,10 +1,9 @@
 package io.quarkus.jwt.test;
 
-import java.net.HttpURLConnection;
+import static org.hamcrest.Matchers.equalTo;
 
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -42,21 +41,19 @@ public class DefaultGroupsCustomFactoryUnitTest {
      */
     @Test
     public void echoGroups() {
-        io.restassured.response.Response response = RestAssured.given().auth()
+        RestAssured.given().auth()
                 .oauth2(token)
-                .get("/endp/echo").andReturn();
-
-        Assertions.assertEquals(HttpURLConnection.HTTP_OK, response.getStatusCode());
-        Assertions.assertEquals("User", response.body().asString());
+                .get("/endp/echo")
+                .then().assertThat().statusCode(200)
+                .body(equalTo("User"));
     }
 
     @Test
     public void echoGroupsWithParser() {
-        io.restassured.response.Response response = RestAssured.given().auth()
+        RestAssured.given().auth()
                 .oauth2(token)
-                .get("/endp/echo-parser").andReturn();
-
-        Assertions.assertEquals(HttpURLConnection.HTTP_OK, response.getStatusCode());
-        Assertions.assertEquals("parser:User", response.body().asString());
+                .get("/endp/echo-parser")
+                .then().assertThat().statusCode(200)
+                .body(equalTo("parser:User"));
     }
 }

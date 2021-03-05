@@ -28,6 +28,7 @@ public class DataSourceReactiveRuntimeConfig {
 
     /**
      * The datasource pool maximum size.
+     * Note that a separate pool instance is started for each thread using it: the size limits each individual pool instance.
      */
     @ConfigItem
     public OptionalInt maxSize = OptionalInt.empty();
@@ -87,9 +88,13 @@ public class DataSourceReactiveRuntimeConfig {
     public PfxConfiguration keyCertificatePfx = new PfxConfiguration();
 
     /**
-     * Experimental: use one connection pool per thread.
+     * Deprecated: this will be removed with no replacement.
+     * We always return a threadsafe pool now, using a separate Pool instance for each Thread.
+     * 
+     * @Deprecated
      */
     @ConfigItem
+    @Deprecated
     public Optional<Boolean> threadLocal = Optional.empty();
 
     /**
@@ -105,7 +110,7 @@ public class DataSourceReactiveRuntimeConfig {
     public Duration reconnectInterval = Duration.ofSeconds(1L);
 
     /**
-     * The maximum time without data written to or read from a connection before it is removed from the pool.
+     * The maximum time without data written to or read from a connection before it is closed.
      */
     @ConfigItem(defaultValueDocumentation = "no timeout")
     public Optional<Duration> idleTimeout = Optional.empty();

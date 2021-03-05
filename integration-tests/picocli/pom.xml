@@ -12,10 +12,6 @@
     <artifactId>quarkus-integration-test-picocli</artifactId>
     <name>Quarkus - Integration Tests - Picocli</name>
 
-    <properties>
-        <maven.compiler.parameters>true</maven.compiler.parameters>
-    </properties>
-
     <dependencies>
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -75,7 +71,6 @@
                                 </goals>
                                 <configuration>
                                     <skip>false</skip>
-                                    <trimStackTrace>false</trimStackTrace>
                                 </configuration>
                             </execution>
                         </executions>

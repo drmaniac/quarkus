@@ -1,7 +1,6 @@
 
 package io.quarkus.kubernetes.deployment;
 
-import static io.quarkus.kubernetes.deployment.Constants.KNATIVE;
 import static io.quarkus.kubernetes.deployment.Constants.KUBERNETES;
 import static io.quarkus.kubernetes.deployment.Constants.MINIKUBE;
 import static io.quarkus.kubernetes.deployment.Constants.OPENSHIFT;
@@ -33,7 +32,7 @@ import io.quarkus.container.image.deployment.ContainerImageCapabilitiesUtil;
 import io.quarkus.container.spi.ContainerImageInfoBuildItem;
 import io.quarkus.deployment.Capabilities;
 import io.quarkus.deployment.Capability;
-import io.quarkus.deployment.IsNormal;
+import io.quarkus.deployment.IsNormalNotRemoteDev;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.builditem.ApplicationInfoBuildItem;
@@ -51,7 +50,7 @@ public class KubernetesDeployer {
             .values().stream()
             .map(s -> "\"" + s + "\"").collect(Collectors.joining(", "));
 
-    @BuildStep(onlyIf = IsNormal.class)
+    @BuildStep(onlyIf = IsNormalNotRemoteDev.class)
     public void selectDeploymentTarget(ContainerImageInfoBuildItem containerImageInfo,
             EnabledKubernetesDeploymentTargetsBuildItem targets,
             Capabilities capabilities,
@@ -70,7 +69,7 @@ public class KubernetesDeployer {
         selectedDeploymentTarget.produce(new SelectedKubernetesDeploymentTargetBuildItem(selectedTarget));
     }
 
-    @BuildStep(onlyIf = IsNormal.class)
+    @BuildStep(onlyIf = IsNormalNotRemoteDev.class)
     public void deploy(KubernetesClientBuildItem kubernetesClient,
             Capabilities capabilities,
             Optional<SelectedKubernetesDeploymentTargetBuildItem> selectedDeploymentTarget,
@@ -124,7 +123,7 @@ public class KubernetesDeployer {
         if (userSpecifiedDeploymentTargets.isEmpty()) {
             selectedTarget = targets.getEntriesSortedByPriority().get(0);
             if (targets.getEntriesSortedByPriority().size() > 1) {
-                log.info("Deploying target '" + selectedTarget.getName()
+                log.info("Selecting target '" + selectedTarget.getName()
                         + "' since it has the highest priority among the implicitly enabled deployment targets");
             }
         } else {
@@ -175,11 +174,7 @@ public class KubernetesDeployer {
         try (FileInputStream fis = new FileInputStream(manifest)) {
             KubernetesList list = Serialization.unmarshalAsList(fis);
             distinct(list.getItems()).forEach(i -> {
-                if (KNATIVE.equals(deploymentTarget.getName().toLowerCase())) {
-                    client.resource(i).inNamespace(namespace).deletingExisting().createOrReplace();
-                } else {
-                    client.resource(i).inNamespace(namespace).createOrReplace();
-                }
+                client.resource(i).inNamespace(namespace).deletingExisting().createOrReplace();
                 log.info("Applied: " + i.getKind() + " " + i.getMetadata().getName() + ".");
             });
 

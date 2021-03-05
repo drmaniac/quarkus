@@ -1,7 +1,7 @@
 package io.quarkus.resteasy.deployment;
 
 import static io.quarkus.deployment.annotations.ExecutionTime.STATIC_INIT;
-import static io.quarkus.resteasy.deployment.SecurityTransformerUtils.hasSecurityAnnotation;
+import static io.quarkus.security.spi.SecurityTransformerUtils.hasSecurityAnnotation;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,11 +31,16 @@ import io.quarkus.resteasy.runtime.JaxRsSecurityConfig;
 import io.quarkus.resteasy.runtime.NotFoundExceptionMapper;
 import io.quarkus.resteasy.runtime.SecurityContextFilter;
 import io.quarkus.resteasy.runtime.UnauthorizedExceptionMapper;
+import io.quarkus.resteasy.runtime.vertx.JsonArrayReader;
+import io.quarkus.resteasy.runtime.vertx.JsonArrayWriter;
+import io.quarkus.resteasy.runtime.vertx.JsonObjectReader;
+import io.quarkus.resteasy.runtime.vertx.JsonObjectWriter;
 import io.quarkus.resteasy.server.common.deployment.ResteasyDeploymentBuildItem;
 import io.quarkus.security.spi.AdditionalSecuredClassesBuildIem;
 import io.quarkus.vertx.http.deployment.HttpRootPathBuildItem;
 import io.quarkus.vertx.http.deployment.devmode.NotFoundPageDisplayableEndpointBuildItem;
 import io.quarkus.vertx.http.deployment.devmode.RouteDescriptionBuildItem;
+import io.quarkus.vertx.http.runtime.devmode.AdditionalRouteDescription;
 import io.quarkus.vertx.http.runtime.devmode.RouteDescription;
 
 public class ResteasyBuiltinsProcessor {
@@ -85,6 +90,16 @@ public class ResteasyBuiltinsProcessor {
         }
     }
 
+    @BuildStep
+    void vertxProviders(BuildProducer<ResteasyJaxrsProviderBuildItem> providers, Capabilities capabilities) {
+        if (capabilities.isPresent(Capability.JACKSON)) {
+            providers.produce(new ResteasyJaxrsProviderBuildItem(JsonArrayReader.class.getName()));
+            providers.produce(new ResteasyJaxrsProviderBuildItem(JsonArrayWriter.class.getName()));
+            providers.produce(new ResteasyJaxrsProviderBuildItem(JsonObjectReader.class.getName()));
+            providers.produce(new ResteasyJaxrsProviderBuildItem(JsonObjectWriter.class.getName()));
+        }
+    }
+
     @Record(STATIC_INIT)
     @BuildStep(onlyIf = IsDevelopment.class)
     void setupExceptionMapper(BuildProducer<ResteasyJaxrsProviderBuildItem> providers, HttpRootPathBuildItem httpRoot,
@@ -108,9 +123,10 @@ public class ResteasyBuiltinsProcessor {
     @BuildStep(onlyIf = IsDevelopment.class)
     void addAdditionalEndpointsExceptionMapper(List<NotFoundPageDisplayableEndpointBuildItem> displayableEndpoints,
             ExceptionMapperRecorder recorder, HttpRootPathBuildItem httpRoot) {
-        List<String> endpoints = displayableEndpoints
+        List<AdditionalRouteDescription> endpoints = displayableEndpoints
                 .stream()
-                .map(displayableAdditionalBuildItem -> displayableAdditionalBuildItem.getEndpoint())
+                .map(displayableAdditionalBuildItem -> new AdditionalRouteDescription(
+                        displayableAdditionalBuildItem.getEndpoint(httpRoot), displayableAdditionalBuildItem.getDescription()))
                 .sorted()
                 .collect(Collectors.toList());
 

@@ -231,7 +231,9 @@ public abstract class QuarkusDevModeLauncher {
         }
 
         public B debugHost(String host) {
-            debugHost = host;
+            if ((null != host) && !host.isEmpty()) {
+                debugHost = host;
+            }
             return (B) this;
         }
 
@@ -387,7 +389,7 @@ public abstract class QuarkusDevModeLauncher {
         devModeContext.setDevModeRunnerJarFile(tempFile);
 
         if (remoteDev) {
-            devModeContext.setMode(QuarkusBootstrap.Mode.PROD);
+            devModeContext.setMode(QuarkusBootstrap.Mode.REMOTE_DEV_CLIENT);
             devModeContext.setAlternateEntryPoint(IsolatedRemoteDevModeMain.class.getName());
         }
 

@@ -1,7 +1,6 @@
 package io.quarkus.vertx.web.deployment;
 
 import static io.quarkus.deployment.annotations.ExecutionTime.RUNTIME_INIT;
-import static io.quarkus.vertx.web.deployment.DotNames.PARAM;
 import static org.objectweb.asm.Opcodes.ACC_FINAL;
 import static org.objectweb.asm.Opcodes.ACC_PRIVATE;
 import static org.objectweb.asm.Opcodes.ACC_PUBLIC;
@@ -22,6 +21,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import javax.enterprise.context.ContextNotActiveException;
@@ -62,6 +63,7 @@ import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.ExecutionTime;
 import io.quarkus.deployment.annotations.Record;
+import io.quarkus.deployment.builditem.ApplicationIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedClassBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
@@ -83,6 +85,7 @@ import io.quarkus.gizmo.TryBlock;
 import io.quarkus.gizmo.WhileLoop;
 import io.quarkus.hibernate.validator.spi.BeanValidationAnnotationsBuildItem;
 import io.quarkus.runtime.LaunchMode;
+import io.quarkus.runtime.TemplateHtmlBuilder;
 import io.quarkus.runtime.util.HashUtil;
 import io.quarkus.vertx.http.deployment.FilterBuildItem;
 import io.quarkus.vertx.http.deployment.HttpRootPathBuildItem;
@@ -125,6 +128,8 @@ class VertxWebProcessor {
     private static final String SLASH = "/";
 
     private static final List<ParameterInjector> PARAM_INJECTORS = initParamInjectors();
+
+    private static final Pattern PATH_PARAM_PATTERN = Pattern.compile("[a-zA-Z_0-9]+");
 
     @BuildStep
     FeatureBuildItem feature() {
@@ -225,9 +230,18 @@ class VertxWebProcessor {
             LaunchModeBuildItem launchMode,
             BuildProducer<RouteDescriptionBuildItem> descriptions,
             Capabilities capabilities,
-            Optional<BeanValidationAnnotationsBuildItem> beanValidationAnnotations) {
+            Optional<BeanValidationAnnotationsBuildItem> beanValidationAnnotations,
+            ApplicationIndexBuildItem applicationIndex) {
 
-        ClassOutput classOutput = new GeneratedClassGizmoAdaptor(generatedClass, true);
+        Predicate<String> appClassPredicate = new Predicate<String>() {
+            @Override
+            public boolean test(String name) {
+                int idx = name.lastIndexOf(HANDLER_SUFFIX);
+                String className = idx != -1 ? name.substring(0, idx) : name;
+                return applicationIndex.getIndex().getClassByName(DotName.createSimple(className.replace("/", "."))) != null;
+            }
+        };
+        ClassOutput classOutput = new GeneratedClassGizmoAdaptor(generatedClass, appClassPredicate);
         IndexView index = beanArchive.getIndex();
         Map<RouteMatcher, MethodInfo> matchers = new HashMap<>();
         boolean validatorAvailable = capabilities.isPresent(Capability.HIBERNATE_VALIDATOR);
@@ -282,22 +296,32 @@ class VertxWebProcessor {
 
                 if (regexValue == null) {
                     if (pathPrefix != null) {
-                        StringBuilder prefixedPath = new StringBuilder();
-                        prefixedPath.append(pathPrefix);
+                        // A path prefix is set
+                        StringBuilder prefixed = new StringBuilder();
+                        prefixed.append(pathPrefix);
                         if (pathValue == null) {
-                            prefixedPath.append(SLASH);
-                            prefixedPath.append(dashify(businessMethod.getMethod().name()));
-                        } else {
-                            if (!pathValue.asString().startsWith(SLASH)) {
-                                prefixedPath.append(SLASH);
+                            // No path param set - use the method name for non-failure handlers
+                            if (routeHandlerType != Route.HandlerType.FAILURE) {
+                                prefixed.append(SLASH);
+                                prefixed.append(dashify(businessMethod.getMethod().name()));
                             }
-                            prefixedPath.append(pathValue.asString());
+                        } else {
+                            // Path param set
+                            if (!pathValue.asString().startsWith(SLASH)) {
+                                prefixed.append(SLASH);
+                            }
+                            prefixed.append(pathValue.asString());
                         }
-                        path = prefixedPath.toString();
+                        path = prefixed.toString();
                     } else {
-                        if (routeHandlerType != Route.HandlerType.FAILURE) {
-                            // De-camel-case the name and then join the segments with hyphens
-                            path = pathValue != null ? pathValue.asString() : dashify(businessMethod.getMethod().name());
+                        if (pathValue == null) {
+                            // No path param set - use the method name for non-failure handlers
+                            if (routeHandlerType != Route.HandlerType.FAILURE) {
+                                path = dashify(businessMethod.getMethod().name());
+                            }
+                        } else {
+                            // Path param set
+                            path = pathValue.asString();
                         }
                     }
                     if (path != null && !path.startsWith(SLASH)) {
@@ -398,9 +422,11 @@ class VertxWebProcessor {
             List<NotFoundPageDisplayableEndpointBuildItem> additionalEndpoints) {
         if (capabilities.isMissing(Capability.RESTEASY)) {
             // Register a special error handler if JAX-RS not available
-            recorder.registerNotFoundHandler(router.getRouter(), httpRoot.getRootPath(),
+            recorder.registerNotFoundHandler(router.getHttpRouter(), httpRoot.getRootPath(),
                     descriptions.stream().map(RouteDescriptionBuildItem::getDescription).collect(Collectors.toList()),
-                    additionalEndpoints.stream().map(NotFoundPageDisplayableEndpointBuildItem::getEndpoint)
+                    additionalEndpoints.stream()
+                            .map(s -> s.isAbsolutePath() ? s.getEndpoint()
+                                    : TemplateHtmlBuilder.adjustRoot(httpRoot.getRootPath(), s.getEndpoint()))
                             .collect(Collectors.toList()));
         }
     }
@@ -478,6 +504,9 @@ class VertxWebProcessor {
                             injector.getTargetHandlerType(), idx, method, bean));
                 }
 
+                // A param injector may validate the parameter annotations
+                injector.validate(bean, method, routeAnnotation, paramType, paramAnnotations);
+
                 if (Route.HandlerType.FAILURE == handlerType && isThrowable(paramType, index)) {
                     failureParams++;
                 }
@@ -509,14 +538,15 @@ class VertxWebProcessor {
         } else {
             baseName = io.quarkus.arc.processor.DotNames.simpleName(bean.getImplClazz().name());
         }
-        String targetPackage = io.quarkus.arc.processor.DotNames.packageName(bean.getImplClazz().name());
+        String targetPackage = io.quarkus.arc.processor.DotNames
+                .internalPackageNameWithTrailingSlash(bean.getImplClazz().name());
 
         StringBuilder sigBuilder = new StringBuilder();
         sigBuilder.append(method.name()).append("_").append(method.returnType().name().toString());
         for (Type i : method.parameters()) {
             sigBuilder.append(i.name().toString());
         }
-        String generatedName = targetPackage.replace('.', '/') + "/" + baseName + HANDLER_SUFFIX + "_" + method.name() + "_"
+        String generatedName = targetPackage + baseName + HANDLER_SUFFIX + "_" + method.name() + "_"
                 + HashUtil.sha1(sigBuilder.toString() + hashSuffix);
 
         ClassCreator invokerCreator = ClassCreator.builder().classOutput(classOutput).className(generatedName)
@@ -825,8 +855,6 @@ class VertxWebProcessor {
             writer.invokeStaticMethod(Methods.MULTI_SUBSCRIBE_BUFFER, res, rc);
         } else if (descriptor.isContentTypeMutinyBuffer()) {
             writer.invokeStaticMethod(Methods.MULTI_SUBSCRIBE_MUTINY_BUFFER, res, rc);
-        } else if (descriptor.isContentTypeRxBuffer()) {
-            writer.invokeStaticMethod(Methods.MULTI_SUBSCRIBE_RX_BUFFER, res, rc);
         } else if (descriptor.isContentTypeString()) {
             writer.invokeStaticMethod(Methods.MULTI_SUBSCRIBE_STRING, res, rc);
         } else { // Multi<Object> - encode to json.
@@ -851,8 +879,6 @@ class VertxWebProcessor {
             writer.invokeStaticMethod(Methods.MULTI_SSE_SUBSCRIBE_BUFFER, res, rc);
         } else if (descriptor.isContentTypeMutinyBuffer()) {
             writer.invokeStaticMethod(Methods.MULTI_SSE_SUBSCRIBE_MUTINY_BUFFER, res, rc);
-        } else if (descriptor.isContentTypeRxBuffer()) {
-            writer.invokeStaticMethod(Methods.MULTI_SSE_SUBSCRIBE_RX_BUFFER, res, rc);
         } else if (descriptor.isContentTypeString()) {
             writer.invokeStaticMethod(Methods.MULTI_SSE_SUBSCRIBE_STRING, res, rc);
         } else { // Multi<Object> - encode to json.
@@ -876,8 +902,7 @@ class VertxWebProcessor {
             writer.invokeStaticMethod(Methods.MULTI_JSON_SUBSCRIBE_VOID, res, rc);
         } else if (descriptor.isContentTypeString()) {
             writer.invokeStaticMethod(Methods.MULTI_JSON_SUBSCRIBE_STRING, res, rc);
-        } else if (descriptor.isContentTypeBuffer() || descriptor.isContentTypeRxBuffer()
-                || descriptor.isContentTypeMutinyBuffer()) {
+        } else if (descriptor.isContentTypeBuffer() || descriptor.isContentTypeMutinyBuffer()) {
             writer.invokeStaticMethod(Methods.MULTI_JSON_FAIL, rc);
         } else { // Multi<Object> - encode to json.
             writer.invokeStaticMethod(Methods.MULTI_JSON_SUBSCRIBE_OBJECT, res, rc);
@@ -898,7 +923,7 @@ class VertxWebProcessor {
      * <pre>
      *     item -> {
      *       if (item != null) {
-     *          Buffer buffer = getBuffer(item); // Manage RX and Mutiny buffer
+     *          Buffer buffer = getBuffer(item); // Manage Mutiny buffer
      *          rc.response().end(buffer);
      *       } else {
      *           rc.fail(new NullPointerException(...);
@@ -979,10 +1004,6 @@ class VertxWebProcessor {
             return res;
         }
 
-        if (descriptor.isContentTypeRxBuffer()) {
-            return writer.invokeVirtualMethod(Methods.RX_GET_DELEGATE, res);
-        }
-
         if (descriptor.isContentTypeMutinyBuffer()) {
             return writer.invokeVirtualMethod(Methods.MUTINY_GET_DELEGATE, res);
         }
@@ -998,6 +1019,7 @@ class VertxWebProcessor {
 
     }
 
+    // De-camel-case the name and then join the segments with hyphens
     private static String dashify(String value) {
         StringBuilder ret = new StringBuilder();
         char[] chars = value.toCharArray();
@@ -1119,20 +1141,6 @@ class VertxWebProcessor {
                     }
                 }).build());
 
-        injectors.add(ParameterInjector.builder().matchType(DotNames.RX_ROUTING_CONTEXT)
-                .resultHandleProvider(new ResultHandleProvider() {
-                    @Override
-                    public ResultHandle get(MethodInfo method, Type paramType, Set<AnnotationInstance> annotations,
-                            ResultHandle routingContext, MethodCreator invoke, int position,
-                            BuildProducer<ReflectiveHierarchyBuildItem> reflectiveHierarchy) {
-                        return invoke.newInstance(
-                                MethodDescriptor
-                                        .ofConstructor(io.vertx.reactivex.ext.web.RoutingContext.class,
-                                                RoutingContext.class),
-                                routingContext);
-                    }
-                }).build());
-
         injectors.add(ParameterInjector.builder().matchType(DotNames.ROUTING_EXCHANGE)
                 .resultHandleProvider(new ResultHandleProvider() {
                     @Override
@@ -1170,7 +1178,7 @@ class VertxWebProcessor {
                     }
                 }).build());
 
-        injectors.add(ParameterInjector.builder().matchType(DotNames.RX_HTTP_SERVER_REQUEST)
+        injectors.add(ParameterInjector.builder().matchType(DotNames.MUTINY_HTTP_SERVER_REQUEST)
                 .resultHandleProvider(new ResultHandleProvider() {
                     @Override
                     public ResultHandle get(MethodInfo method, Type paramType, Set<AnnotationInstance> annotations,
@@ -1178,7 +1186,7 @@ class VertxWebProcessor {
                             BuildProducer<ReflectiveHierarchyBuildItem> reflectiveHierarchy) {
                         return invoke.newInstance(
                                 MethodDescriptor
-                                        .ofConstructor(io.vertx.reactivex.core.http.HttpServerRequest.class,
+                                        .ofConstructor(io.vertx.mutiny.core.http.HttpServerRequest.class,
                                                 HttpServerRequest.class),
                                 invoke
                                         .invokeInterfaceMethod(Methods.REQUEST,
@@ -1187,7 +1195,7 @@ class VertxWebProcessor {
                 }).build());
 
         injectors
-                .add(ParameterInjector.builder().matchType(DotNames.RX_HTTP_SERVER_RESPONSE)
+                .add(ParameterInjector.builder().matchType(DotNames.MUTINY_HTTP_SERVER_RESPONSE)
                         .resultHandleProvider(new ResultHandleProvider() {
                             @Override
                             public ResultHandle get(MethodInfo method, Type paramType,
@@ -1196,7 +1204,7 @@ class VertxWebProcessor {
                                     BuildProducer<ReflectiveHierarchyBuildItem> reflectiveHierarchy) {
                                 return invoke.newInstance(
                                         MethodDescriptor
-                                                .ofConstructor(io.vertx.reactivex.core.http.HttpServerResponse.class,
+                                                .ofConstructor(io.vertx.mutiny.core.http.HttpServerResponse.class,
                                                         HttpServerResponse.class),
                                         invoke
                                                 .invokeInterfaceMethod(Methods.RESPONSE,
@@ -1208,8 +1216,34 @@ class VertxWebProcessor {
                 .matchType(io.quarkus.arc.processor.DotNames.STRING)
                 .matchOptionalOf(io.quarkus.arc.processor.DotNames.STRING)
                 .matchListOf(io.quarkus.arc.processor.DotNames.STRING)
-                .requireAnnotations(PARAM)
-                .resultHandleProvider(new ParamAndHeaderProvider(PARAM, Methods.REQUEST_PARAMS, Methods.REQUEST_GET_PARAM))
+                .requireAnnotations(DotNames.PARAM)
+                .resultHandleProvider(
+                        new ParamAndHeaderProvider(DotNames.PARAM, Methods.REQUEST_PARAMS, Methods.REQUEST_GET_PARAM))
+                .validate(new ParamValidator() {
+                    @Override
+                    public void validate(BeanInfo bean, MethodInfo method, AnnotationInstance routeAnnotation, Type paramType,
+                            Set<AnnotationInstance> paramAnnotations) {
+                        AnnotationInstance paramAnnotation = Annotations.find(paramAnnotations, DotNames.PARAM);
+                        AnnotationValue paramNameValue = paramAnnotation.value();
+                        if (paramNameValue != null && !paramNameValue.asString().equals(Param.ELEMENT_NAME)) {
+                            String paramName = paramNameValue.asString();
+                            AnnotationValue regexValue = routeAnnotation.value(VALUE_REGEX);
+                            AnnotationValue pathValue = routeAnnotation.value(VALUE_PATH);
+                            if (regexValue == null && pathValue != null) {
+                                String path = pathValue.asString();
+                                // Validate the name if used as a path parameter
+                                if (path.contains(":" + paramName) && !PATH_PARAM_PATTERN.matcher(paramName).matches()) {
+                                    // TODO This requirement should be relaxed in vertx 4.0.3+
+                                    // https://github.com/vert-x3/vertx-web/pull/1881
+                                    throw new IllegalStateException(String.format(
+                                            "A path param name must only contain word characters (a-zA-Z_0-9): %s [route method %s declared on %s]",
+                                            paramName,
+                                            method, bean.getBeanClass()));
+                                }
+                            }
+                        }
+                    }
+                })
                 .build());
 
         injectors.add(ParameterInjector.builder().matchPrimitiveWrappers()
@@ -1394,6 +1428,7 @@ class VertxWebProcessor {
         final TriPredicate<Type, Set<AnnotationInstance>, IndexView> predicate;
         final ResultHandleProvider provider;
         final Route.HandlerType targetHandlerType;
+        final ParamValidator validator;
 
         ParameterInjector(ParameterInjector.Builder builder) {
             if (builder.predicate != null) {
@@ -1458,6 +1493,7 @@ class VertxWebProcessor {
             }
             this.provider = builder.provider;
             this.targetHandlerType = builder.targetHandlerType;
+            this.validator = builder.validator;
         }
 
         boolean matches(Type paramType, Set<AnnotationInstance> paramAnnotations, IndexView index) {
@@ -1468,6 +1504,13 @@ class VertxWebProcessor {
             return targetHandlerType;
         }
 
+        void validate(BeanInfo bean, MethodInfo method, AnnotationInstance routeInstance, Type paramType,
+                Set<AnnotationInstance> paramAnnotations) {
+            if (validator != null) {
+                validator.validate(bean, method, routeInstance, paramType, paramAnnotations);
+            }
+        }
+
         ResultHandle getResultHandle(MethodInfo method, Type paramType, Set<AnnotationInstance> annotations,
                 ResultHandle routingContext, MethodCreator invoke, int position,
                 BuildProducer<ReflectiveHierarchyBuildItem> reflectiveHierarchy) {
@@ -1476,13 +1519,14 @@ class VertxWebProcessor {
 
         static class Builder {
 
-            // An injector could provide either a custom predicate or match/skip types and required annotations 
+            // An injector could provide either a custom predicate or match/skip types and required annotations
             TriPredicate<Type, Set<AnnotationInstance>, IndexView> predicate;
             List<Type> matchTypes;
             List<Type> skipTypes;
             List<DotName> requiredAnnotationNames = Collections.emptyList();
             ResultHandleProvider provider;
             Route.HandlerType targetHandlerType;
+            ParamValidator validator;
 
             Builder matchType(DotName className) {
                 return matchType(Type.create(className, Kind.CLASS));
@@ -1560,6 +1604,11 @@ class VertxWebProcessor {
                 return this;
             }
 
+            Builder validate(ParamValidator validator) {
+                this.validator = validator;
+                return this;
+            }
+
             ParameterInjector build() {
                 return new ParameterInjector(this);
             }
@@ -1570,8 +1619,8 @@ class VertxWebProcessor {
 
     static void convertPrimitiveAndSet(AssignableResultHandle paramHandle, Type paramType, BytecodeCreator invoke,
             MethodInfo method, int position) {
-        // For example: 
-        // if(param != null) { 
+        // For example:
+        // if(param != null) {
         //    try {
         //       param = Long.valueOf(param);
         //    } catch(Throwable e) {
@@ -1627,6 +1676,14 @@ class VertxWebProcessor {
     interface TriPredicate<A, B, C> {
 
         boolean test(A a, B b, C c);
+
+    }
+
+    @FunctionalInterface
+    interface ParamValidator {
+
+        void validate(BeanInfo bean, MethodInfo method, AnnotationInstance routeAnnotation, Type paramType,
+                Set<AnnotationInstance> paramAnnotations);
 
     }
 

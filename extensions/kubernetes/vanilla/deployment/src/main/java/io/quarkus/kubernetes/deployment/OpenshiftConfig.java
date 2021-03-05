@@ -106,6 +106,8 @@ public class OpenshiftConfig implements PlatformConfiguration {
 
     /**
      * The host under which the application is going to be exposed
+     * 
+     * @deprecated Use the {@code quarkus.openshift.route.host} instead
      */
     @ConfigItem
     Optional<String> host;
@@ -247,9 +249,16 @@ public class OpenshiftConfig implements PlatformConfiguration {
 
     /**
      * If true, an Openshift Route will be created
+     * 
+     * @deprecated Use the {@code quarkus.openshift.route.exposition} instead
      */
     @ConfigItem
     boolean expose;
+
+    /**
+     * Openshift route configuration
+     */
+    ExpositionConfig route;
 
     /**
      * If true, the 'app.kubernetes.io/version' label will be part of the selectors of Service and DeploymentConfig
@@ -437,5 +446,31 @@ public class OpenshiftConfig implements PlatformConfiguration {
 
     public EnvVarsConfig getEnv() {
         return env;
+    }
+
+    /**
+     * If set, the secret will mounted to the application container and its contents will be used for application configuration.
+     */
+    @ConfigItem
+    Optional<String> appSecret;
+
+    /**
+     * If set, the config amp will mounted to the application container and its contents will be used for application
+     * configuration.
+     */
+    @ConfigItem
+    Optional<String> appConfigMap;
+
+    public Optional<String> getAppSecret() {
+        return this.appSecret;
+    }
+
+    public Optional<String> getAppConfigMap() {
+        return this.appConfigMap;
+    }
+
+    @Override
+    public Optional<ExpositionConfig> getExposition() {
+        return Optional.of(route);
     }
 }

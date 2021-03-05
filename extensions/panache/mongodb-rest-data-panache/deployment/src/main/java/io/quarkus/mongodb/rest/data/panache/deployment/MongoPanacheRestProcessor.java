@@ -24,8 +24,10 @@ import io.quarkus.gizmo.ClassOutput;
 import io.quarkus.gizmo.Gizmo;
 import io.quarkus.mongodb.rest.data.panache.PanacheMongoEntityResource;
 import io.quarkus.mongodb.rest.data.panache.PanacheMongoRepositoryResource;
+import io.quarkus.mongodb.rest.data.panache.runtime.RestDataPanacheExceptionMapper;
 import io.quarkus.rest.data.panache.deployment.ResourceMetadata;
 import io.quarkus.rest.data.panache.deployment.RestDataResourceBuildItem;
+import io.quarkus.resteasy.common.spi.ResteasyJaxrsProviderBuildItem;
 
 class MongoPanacheRestProcessor {
 
@@ -41,10 +43,17 @@ class MongoPanacheRestProcessor {
     }
 
     @BuildStep
+    ResteasyJaxrsProviderBuildItem registerRestDataPanacheExceptionMapper() {
+        return new ResteasyJaxrsProviderBuildItem(RestDataPanacheExceptionMapper.class.getName());
+    }
+
+    @BuildStep
     void findEntityResources(CombinedIndexBuildItem index,
             BuildProducer<GeneratedBeanBuildItem> implementationsProducer,
-            BuildProducer<RestDataResourceBuildItem> restDataResourceProducer) {
-        ResourceImplementor resourceImplementor = new ResourceImplementor(new EntityClassHelper(index.getIndex()));
+            BuildProducer<RestDataResourceBuildItem> restDataResourceProducer,
+            BuildProducer<BytecodeTransformerBuildItem> bytecodeTransformersProducer) {
+        EntityClassHelper entityClassHelper = new EntityClassHelper(index.getIndex());
+        ResourceImplementor resourceImplementor = new ResourceImplementor(entityClassHelper);
         ClassOutput classOutput = new GeneratedBeanGizmoAdaptor(implementationsProducer);
 
         for (ClassInfo classInfo : index.getIndex()
@@ -62,6 +71,8 @@ class MongoPanacheRestProcessor {
 
             restDataResourceProducer.produce(new RestDataResourceBuildItem(
                     new ResourceMetadata(resourceClass, resourceInterface, entityType, idType)));
+            bytecodeTransformersProducer.produce(
+                    getEntityIdAnnotationTransformer(entityType, entityClassHelper.getIdField(entityType).name()));
         }
     }
 

@@ -1,6 +1,7 @@
 package io.quarkus.it.smallrye.config;
 
 import java.time.Duration;
+import java.time.Period;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -13,6 +14,7 @@ import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithConverter;
 import io.smallrye.config.WithDefault;
 import io.smallrye.config.WithName;
+import io.smallrye.config.WithParentName;
 
 @ConfigMapping(prefix = "server")
 public interface Server {
@@ -31,7 +33,8 @@ public interface Server {
     int threads();
 
     @JsonProperty
-    Map<String, String> form();
+    @WithParentName
+    Map<String, Form> form();
 
     @JsonProperty
     Optional<Ssl> ssl();
@@ -40,7 +43,24 @@ public interface Server {
     Optional<Proxy> proxy();
 
     @JsonProperty
+    Optional<Cors> cors();
+
+    @JsonProperty
     Log log();
+
+    interface Form {
+        @JsonProperty
+        String loginPage();
+
+        @JsonProperty
+        String errorPage();
+
+        @JsonProperty
+        String landingPage();
+
+        @JsonProperty
+        Optional<String> cookie();
+    }
 
     interface Ssl {
         @JsonProperty
@@ -76,12 +96,31 @@ public interface Server {
         @WithDefault("COMMON")
         Pattern pattern();
 
+        @JsonProperty
+        Period period();
+
         @RegisterForReflection
         enum Pattern {
             COMMON,
             SHORT,
             COMBINED,
             LONG;
+        }
+    }
+
+    interface Cors {
+        @JsonProperty
+        List<Origin> origins();
+
+        @JsonProperty
+        List<String> methods();
+
+        interface Origin {
+            @JsonProperty
+            String host();
+
+            @JsonProperty
+            int port();
         }
     }
 }

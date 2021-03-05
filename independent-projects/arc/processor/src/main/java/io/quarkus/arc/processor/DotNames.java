@@ -2,6 +2,7 @@ package io.quarkus.arc.processor;
 
 import io.quarkus.arc.AlternativePriority;
 import io.quarkus.arc.DefaultBean;
+import io.quarkus.arc.InjectableBean;
 import io.quarkus.arc.InjectableInstance;
 import io.quarkus.arc.impl.ComputingCache;
 import java.lang.annotation.Repeatable;
@@ -76,6 +77,7 @@ public final class DotNames {
     public static final DotName DEFAULT = create(Default.class);
     public static final DotName ANY = create(Any.class);
     public static final DotName BEAN = create(Bean.class);
+    public static final DotName INJECTABLE_BEAN = create(InjectableBean.class);
     public static final DotName BEAN_MANAGER = create(BeanManager.class);
     public static final DotName EVENT = create(Event.class);
     public static final DotName EVENT_METADATA = create(EventMetadata.class);
@@ -147,7 +149,6 @@ public final class DotNames {
     }
 
     /**
-     *
      * @param clazz
      * @return the simple name for the given top-level or nested class
      */
@@ -192,6 +193,22 @@ public final class DotNames {
             return "";
         }
         return name.substring(0, index);
+    }
+
+    /**
+     * Returns a package name with a trailing '/'. If the class is in the default package then this returns
+     * the empty string.
+     * <p>
+     * This method should be used to determine the package to generate classes in to ensure the default package is handled
+     * correctly.
+     */
+    public static String internalPackageNameWithTrailingSlash(DotName dotName) {
+        String name = dotName.toString();
+        int index = name.lastIndexOf('.');
+        if (index == -1) {
+            return "";
+        }
+        return name.substring(0, index).replace(".", "/") + "/";
     }
 
 }

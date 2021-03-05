@@ -49,7 +49,7 @@ class PrometheusMetricsRegistryTest {
     }
 
     @Test
-    @Order(3)
+    @Order(4)
     void testPathParameter() {
         given()
                 .when().get("/message/item/123")
@@ -58,7 +58,26 @@ class PrometheusMetricsRegistryTest {
     }
 
     @Test
-    @Order(4)
+    @Order(5)
+    void testMultipleParameters() {
+        given()
+                .when().get("/message/match/123/1")
+                .then()
+                .statusCode(200);
+
+        given()
+                .when().get("/message/match/1/123")
+                .then()
+                .statusCode(200);
+
+        given()
+                .when().get("/message/match/baloney")
+                .then()
+                .statusCode(200);
+    }
+
+    @Test
+    @Order(6)
     void testPanacheCalls() {
         given()
                 .when().get("/fruit/create")
@@ -72,7 +91,7 @@ class PrometheusMetricsRegistryTest {
     }
 
     @Test
-    @Order(5)
+    @Order(7)
     void testPrimeEndpointCalls() {
         given()
                 .when().get("/prime/7")
@@ -82,7 +101,7 @@ class PrometheusMetricsRegistryTest {
     }
 
     @Test
-    @Order(6)
+    @Order(8)
     void testAllTheThings() {
         given()
                 .when().get("/all-the-things")
@@ -95,7 +114,7 @@ class PrometheusMetricsRegistryTest {
     @Order(10)
     void testPrometheusScrapeEndpoint() {
         given()
-                .when().get("/metrics")
+                .when().get("/q/metrics")
                 .then()
                 .statusCode(200)
 
@@ -117,6 +136,8 @@ class PrometheusMetricsRegistryTest {
                 .body(containsString("uri=\"/message\""))
                 .body(containsString("uri=\"/message/item/{id}\""))
                 .body(containsString("outcome=\"SUCCESS\""))
+                .body(containsString("uri=\"/message/match/{id}/{sub}\""))
+                .body(containsString("uri=\"/message/match/{other}\""))
 
                 // Verify Hibernate Metrics
                 .body(containsString(
@@ -128,7 +149,7 @@ class PrometheusMetricsRegistryTest {
                 .body(containsString(
                         "hibernate_entities_inserts_total{entityManagerFactory=\"<default>\",env=\"test\",registry=\"prometheus\",} 3.0"))
                 .body(containsString(
-                        "hibernate_flushes_total{entityManagerFactory=\"<default>\",env=\"test\",registry=\"prometheus\",} 2.0"))
+                        "hibernate_flushes_total{entityManagerFactory=\"<default>\",env=\"test\",registry=\"prometheus\",} 1.0"))
 
                 // Annotated counters
                 .body(not(containsString("metric_none")))
@@ -163,6 +184,14 @@ class PrometheusMetricsRegistryTest {
                         "longCall_seconds_active_count{class=\"io.quarkus.it.micrometer.prometheus.AnnotatedResource\",env=\"test\",extra=\"tag\",method=\"longCall\",registry=\"prometheus\",}"))
                 .body(containsString(
                         "async_longCall_seconds_duration_sum{class=\"io.quarkus.it.micrometer.prometheus.AnnotatedResource\",env=\"test\",extra=\"tag\",method=\"longAsyncCall\",registry=\"prometheus\",} 0.0"))
+
+                // Configured median, 95th percentile and histogram buckets
+                .body(containsString(
+                        "prime_number_test_seconds{env=\"test\",registry=\"prometheus\",quantile=\"0.5\",}"))
+                .body(containsString(
+                        "prime_number_test_seconds{env=\"test\",registry=\"prometheus\",quantile=\"0.95\",}"))
+                .body(containsString(
+                        "prime_number_test_seconds_bucket{env=\"test\",registry=\"prometheus\",le=\"0.001\",}"))
 
                 // this was defined by a tag to a non-matching registry, and should not be found
                 .body(not(containsString("class-should-not-match")))

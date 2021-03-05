@@ -9,6 +9,7 @@ import javax.ws.rs.core.MediaType;
 
 import org.eclipse.microprofile.jwt.JsonWebToken;
 
+import io.quarkus.it.keycloak.model.User;
 import io.quarkus.security.identity.SecurityIdentity;
 
 /**
@@ -34,18 +35,5 @@ public class UsersResource {
     @Produces(MediaType.APPLICATION_JSON)
     public User preferredUserName() {
         return new User(((JsonWebToken) identity.getPrincipal()).getClaim("preferred_username"));
-    }
-
-    public static class User {
-
-        private final String userName;
-
-        User(String name) {
-            this.userName = name;
-        }
-
-        public String getUserName() {
-            return userName;
-        }
     }
 }

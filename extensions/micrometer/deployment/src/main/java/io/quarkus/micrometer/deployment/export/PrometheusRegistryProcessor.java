@@ -12,9 +12,10 @@ import io.quarkus.deployment.annotations.Record;
 import io.quarkus.micrometer.deployment.MicrometerRegistryProviderBuildItem;
 import io.quarkus.micrometer.runtime.MicrometerRecorder;
 import io.quarkus.micrometer.runtime.config.MicrometerConfig;
-import io.quarkus.micrometer.runtime.config.PrometheusConfig;
+import io.quarkus.micrometer.runtime.config.PrometheusConfigGroup;
 import io.quarkus.micrometer.runtime.export.PrometheusMeterRegistryProvider;
 import io.quarkus.micrometer.runtime.export.PrometheusRecorder;
+import io.quarkus.vertx.http.deployment.NonApplicationRootPathBuildItem;
 import io.quarkus.vertx.http.deployment.RouteBuildItem;
 
 /**
@@ -37,7 +38,8 @@ public class PrometheusRegistryProcessor {
     }
 
     @BuildStep(onlyIf = PrometheusEnabled.class)
-    MicrometerRegistryProviderBuildItem createPrometheusRegistry(BuildProducer<AdditionalBeanBuildItem> additionalBeans) {
+    MicrometerRegistryProviderBuildItem createPrometheusRegistry(
+            BuildProducer<AdditionalBeanBuildItem> additionalBeans) {
 
         // Add the Prometheus Registry Producer
         additionalBeans.produce(AdditionalBeanBuildItem.builder()
@@ -52,16 +54,25 @@ public class PrometheusRegistryProcessor {
     @Record(value = ExecutionTime.STATIC_INIT)
     void createPrometheusRoute(BuildProducer<RouteBuildItem> routes,
             MicrometerConfig mConfig,
+            NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem,
             PrometheusRecorder recorder) {
 
-        PrometheusConfig pConfig = mConfig.export.prometheus;
+        PrometheusConfigGroup pConfig = mConfig.export.prometheus;
         log.debug("PROMETHEUS CONFIG: " + pConfig);
 
         // Exact match for resources matched to the root path
-        routes.produce(new RouteBuildItem(recorder.route(pConfig.path), recorder.getHandler()));
+        routes.produce(nonApplicationRootPathBuildItem.routeBuilder()
+                .routeFunction(pConfig.path, recorder.route())
+                .handler(recorder.getHandler())
+                .requiresLegacyRedirect()
+                .displayOnNotFoundPage("Metrics", pConfig.path)
+                .build());
 
         // Match paths that begin with the deployment path
-        String matchPath = pConfig.path + (pConfig.path.endsWith("/") ? "*" : "/*");
-        routes.produce(new RouteBuildItem(recorder.route(matchPath), recorder.getHandler()));
+        routes.produce(nonApplicationRootPathBuildItem.routeBuilder()
+                .routeFunction(pConfig.path + (pConfig.path.endsWith("/") ? "*" : "/*"), recorder.route())
+                .handler(recorder.getHandler())
+                .requiresLegacyRedirect()
+                .build());
     }
 }

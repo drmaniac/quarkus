@@ -3,6 +3,7 @@ package io.quarkus.arc.deployment.configproperties;
 import static io.quarkus.arc.deployment.configproperties.ConfigPropertiesUtil.createReadMandatoryValueAndConvertIfNeeded;
 import static io.quarkus.arc.deployment.configproperties.ConfigPropertiesUtil.createReadOptionalValueAndConvertIfNeeded;
 import static io.quarkus.arc.deployment.configproperties.ConfigPropertiesUtil.determineSingleGenericType;
+import static io.quarkus.arc.deployment.configproperties.ConfigPropertiesUtil.registerImplicitConverter;
 
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -16,6 +17,7 @@ import javax.enterprise.context.Dependent;
 import javax.enterprise.event.Observes;
 import javax.enterprise.inject.Default;
 import javax.enterprise.inject.Produces;
+import javax.enterprise.inject.spi.DeploymentException;
 import javax.inject.Inject;
 
 import org.eclipse.microprofile.config.Config;
@@ -33,8 +35,11 @@ import org.jboss.logging.Logger;
 import io.quarkus.arc.config.ConfigProperties;
 import io.quarkus.arc.deployment.ConfigPropertyBuildItem;
 import io.quarkus.arc.deployment.configproperties.ConfigPropertiesUtil.ReadOptionalResponse;
+import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.bean.JavaBeanUtil;
+import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveMethodBuildItem;
 import io.quarkus.gizmo.BranchResult;
 import io.quarkus.gizmo.BytecodeCreator;
@@ -56,7 +61,28 @@ final class ClassConfigPropertiesUtil {
     private static final String HIBERNATE_VALIDATOR_IMPL_CLASS = "org.hibernate.validator.HibernateValidator";
     private static final String CONSTRAINT_VIOLATION_EXCEPTION_CLASS = "javax.validation.ConstraintViolationException";
 
-    private ClassConfigPropertiesUtil() {
+    private final IndexView applicationIndex;
+    private final YamlListObjectHandler yamlListObjectHandler;
+    private final ClassCreator producerClassCreator;
+    private final Capabilities capabilities;
+    private final BuildProducer<ReflectiveClassBuildItem> reflectiveClasses;
+    private final BuildProducer<ReflectiveMethodBuildItem> reflectiveMethods;
+    private final BuildProducer<ConfigPropertyBuildItem> configProperties;
+
+    ClassConfigPropertiesUtil(IndexView applicationIndex, YamlListObjectHandler yamlListObjectHandler,
+            ClassCreator producerClassCreator,
+            Capabilities capabilities,
+            BuildProducer<ReflectiveClassBuildItem> reflectiveClasses,
+            BuildProducer<ReflectiveMethodBuildItem> reflectiveMethods,
+            BuildProducer<ConfigPropertyBuildItem> configProperties) {
+
+        this.applicationIndex = applicationIndex;
+        this.yamlListObjectHandler = yamlListObjectHandler;
+        this.producerClassCreator = producerClassCreator;
+        this.capabilities = capabilities;
+        this.reflectiveClasses = reflectiveClasses;
+        this.reflectiveMethods = reflectiveMethods;
+        this.configProperties = configProperties;
     }
 
     /**
@@ -123,12 +149,10 @@ final class ClassConfigPropertiesUtil {
     /**
      * @return true if the configuration class needs validation
      */
-    static boolean addProducerMethodForClassConfigProperties(ClassLoader classLoader, ClassInfo configPropertiesClassInfo,
-            ClassCreator producerClassCreator, String prefixStr, ConfigProperties.NamingStrategy namingStrategy,
+    boolean addProducerMethodForClassConfigProperties(ClassLoader classLoader, ClassInfo configPropertiesClassInfo,
+            String prefixStr, ConfigProperties.NamingStrategy namingStrategy,
             boolean failOnMismatchingMember,
-            boolean needsQualifier, IndexView applicationIndex,
-            BuildProducer<ReflectiveMethodBuildItem> reflectiveMethods,
-            BuildProducer<ConfigPropertyBuildItem> configProperties) {
+            boolean needsQualifier) {
 
         if (!configPropertiesClassInfo.hasNoArgsConstructor()) {
             throw new IllegalArgumentException(
@@ -181,7 +205,7 @@ final class ClassConfigPropertiesUtil {
             }
 
             ResultHandle configObject = populateConfigObject(classLoader, configPropertiesClassInfo, prefixStr, namingStrategy,
-                    failOnMismatchingMember, methodCreator, applicationIndex, reflectiveMethods, configProperties);
+                    failOnMismatchingMember, methodCreator);
 
             if (needsValidation) {
                 createValidationCodePath(methodCreator, configObject, prefixStr);
@@ -210,11 +234,8 @@ final class ClassConfigPropertiesUtil {
         }
     }
 
-    private static ResultHandle populateConfigObject(ClassLoader classLoader, ClassInfo configClassInfo, String prefixStr,
-            ConfigProperties.NamingStrategy namingStrategy, boolean failOnMismatchingMember, MethodCreator methodCreator,
-            IndexView applicationIndex,
-            BuildProducer<ReflectiveMethodBuildItem> reflectiveMethods,
-            BuildProducer<ConfigPropertyBuildItem> configProperties) {
+    private ResultHandle populateConfigObject(ClassLoader classLoader, ClassInfo configClassInfo, String prefixStr,
+            ConfigProperties.NamingStrategy namingStrategy, boolean failOnMismatchingMember, MethodCreator methodCreator) {
         String configObjectClassStr = configClassInfo.name().toString();
         ResultHandle configObject = methodCreator.newInstance(MethodDescriptor.ofConstructor(configObjectClassStr));
 
@@ -315,8 +336,7 @@ final class ClassConfigPropertiesUtil {
 
                         ResultHandle nestedConfigObject = populateConfigObject(classLoader, fieldTypeClassInfo,
                                 getFullConfigName(prefixStr, namingStrategy, field), namingStrategy, failOnMismatchingMember,
-                                methodCreator,
-                                applicationIndex, reflectiveMethods, configProperties);
+                                methodCreator);
                         createWriteValue(methodCreator, configObject, field, setter, useFieldAccess, nestedConfigObject);
                     }
                 } else {
@@ -327,6 +347,7 @@ final class ClassConfigPropertiesUtil {
 
                         // config.getOptionalValue
                         if (genericType.kind() != Type.Kind.PARAMETERIZED_TYPE) {
+                            registerImplicitConverter(genericType, reflectiveClasses);
                             ResultHandle setterValue = methodCreator.invokeInterfaceMethod(
                                     MethodDescriptor.ofMethod(Config.class, "getOptionalValue", Optional.class, String.class,
                                             Class.class),
@@ -350,7 +371,18 @@ final class ClassConfigPropertiesUtil {
                                     readOptionalResponse.getIsPresentFalse().invokeStaticMethod(
                                             MethodDescriptor.ofMethod(Optional.class, "empty", Optional.class)));
                         }
+                    } else if (ConfigPropertiesUtil.isListOfObject(fieldType)) {
+                        if (!capabilities.isPresent(Capability.CONFIG_YAML)) {
+                            throw new DeploymentException(
+                                    "Support for List of objects in classes annotated with '@ConfigProperties' is only possible via the 'quarkus-config-yaml' extension. Offending field is '"
+                                            + field.name() + "' of class '" + field.declaringClass().name().toString());
+                        }
+                        ResultHandle setterValue = yamlListObjectHandler.handle(new YamlListObjectHandler.FieldMember(field),
+                                methodCreator, mpConfig,
+                                getEffectiveConfigName(namingStrategy, field), fullConfigName);
+                        createWriteValue(methodCreator, configObject, field, setter, useFieldAccess, setterValue);
                     } else {
+                        registerImplicitConverter(fieldType, reflectiveClasses);
                         populateTypicalProperty(methodCreator, configObject, configPropertyBuildItemCandidates,
                                 currentClassInHierarchy, field, useFieldAccess, fieldType, setter, mpConfig,
                                 fullConfigName);
@@ -427,6 +459,10 @@ final class ClassConfigPropertiesUtil {
     }
 
     private static String getFullConfigName(String prefixStr, ConfigProperties.NamingStrategy namingStrategy, FieldInfo field) {
+        return prefixStr + "." + getEffectiveConfigName(namingStrategy, field);
+    }
+
+    private static String getEffectiveConfigName(ConfigProperties.NamingStrategy namingStrategy, FieldInfo field) {
         String nameToUse = field.name();
         AnnotationInstance configPropertyAnnotation = field.annotation(DotNames.CONFIG_PROPERTY);
         if (configPropertyAnnotation != null) {
@@ -435,7 +471,7 @@ final class ClassConfigPropertiesUtil {
                 nameToUse = configPropertyNameValue.asString();
             }
         }
-        return prefixStr + "." + namingStrategy.getName(nameToUse);
+        return namingStrategy.getName(nameToUse);
     }
 
     private static void createWriteValue(BytecodeCreator bytecodeCreator, ResultHandle configObject, FieldInfo field,

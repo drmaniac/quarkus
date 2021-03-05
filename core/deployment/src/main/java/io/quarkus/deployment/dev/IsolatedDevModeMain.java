@@ -20,6 +20,7 @@ import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -42,11 +43,12 @@ import io.quarkus.builder.BuildStep;
 import io.quarkus.deployment.CodeGenerator;
 import io.quarkus.deployment.builditem.ApplicationClassPredicateBuildItem;
 import io.quarkus.deployment.codegen.CodeGenData;
+import io.quarkus.deployment.steps.ClassTransformingBuildStep;
 import io.quarkus.deployment.util.FSWatchUtil;
+import io.quarkus.dev.console.DevConsoleManager;
 import io.quarkus.dev.spi.DevModeType;
 import io.quarkus.dev.spi.HotReplacementSetup;
 import io.quarkus.runner.bootstrap.AugmentActionImpl;
-import io.quarkus.runner.bootstrap.StartupActionImpl;
 import io.quarkus.runtime.ApplicationLifecycleManager;
 import io.quarkus.runtime.configuration.QuarkusConfigFactory;
 import io.quarkus.runtime.logging.LoggingSetupRecorder;
@@ -74,7 +76,7 @@ public class IsolatedDevModeMain implements BiConsumer<CuratedApplication, Map<S
             boolean augmentDone = false;
             //ok, we have resolved all the deps
             try {
-                StartupActionImpl start = (StartupActionImpl) augmentAction.createInitialRuntimeApplication();
+                StartupAction start = augmentAction.createInitialRuntimeApplication();
                 //this is a bit yuck, but we need replace the default
                 //exit handler in the runtime class loader
                 //TODO: look at implementing a common core classloader, that removes the need for this sort of crappy hack
@@ -224,7 +226,12 @@ public class IsolatedDevModeMain implements BiConsumer<CuratedApplication, Map<S
                 return null;
             }
             RuntimeUpdatesProcessor processor = new RuntimeUpdatesProcessor(appRoot, context, compiler,
-                    devModeType, this::restartCallback, null);
+                    devModeType, this::restartCallback, null, new BiFunction<String, byte[], byte[]>() {
+                        @Override
+                        public byte[] apply(String s, byte[] bytes) {
+                            return ClassTransformingBuildStep.transform(s, bytes);
+                        }
+                    });
 
             for (HotReplacementSetup service : ServiceLoader.load(HotReplacementSetup.class,
                     curatedApplication.getBaseRuntimeClassLoader())) {
@@ -232,6 +239,8 @@ public class IsolatedDevModeMain implements BiConsumer<CuratedApplication, Map<S
                 service.setupHotDeployment(processor);
                 processor.addHotReplacementSetup(service);
             }
+            DevConsoleManager.setQuarkusBootstrap(curatedApplication.getQuarkusBootstrap());
+            DevConsoleManager.setHotReplacementContext(processor);
             return processor;
         }
         return null;
@@ -344,7 +353,8 @@ public class IsolatedDevModeMain implements BiConsumer<CuratedApplication, Map<S
                                 }
                             }).produces(ApplicationClassPredicateBuildItem.class).build();
                         }
-                    }));
+                    }),
+                    Collections.emptyList());
             List<CodeGenData> codeGens = new ArrayList<>();
             QuarkusClassLoader deploymentClassLoader = curatedApplication.createDeploymentClassLoader();
 

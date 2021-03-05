@@ -20,6 +20,7 @@ import io.quarkus.arc.Arc;
 import io.quarkus.arc.InstanceHandle;
 import io.quarkus.qute.Engine;
 import io.quarkus.qute.EngineBuilder;
+import io.quarkus.qute.HtmlEscaper;
 import io.quarkus.qute.NamespaceResolver;
 import io.quarkus.qute.ReflectionValueResolver;
 import io.quarkus.qute.Resolver;
@@ -75,6 +76,9 @@ public class EngineProducer {
         builder.addValueResolver(ValueResolvers.rawResolver());
         builder.addValueResolver(ValueResolvers.logicalAndResolver());
         builder.addValueResolver(ValueResolvers.logicalOrResolver());
+        builder.addValueResolver(ValueResolvers.orEmpty());
+        // Note that arrays are handled specifically during validation
+        builder.addValueResolver(ValueResolvers.arrayResolver());
 
         // If needed use a specific result mapper for the selected strategy  
         switch (runtimeConfig.propertyNotFoundStrategy) {

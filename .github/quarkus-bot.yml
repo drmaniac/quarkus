@@ -11,7 +11,7 @@ triage:
         - integration-tests/amazon-lambda
     - labels: [area/persistence]
       title: "db2"
-      notify: [aguibert]
+      notify: [mswatosh]
       directories:
         - extensions/reactive-db2-client/
         - extensions/jdbc/jdbc-db2/
@@ -53,7 +53,7 @@ triage:
         - devtools/platform-descriptor-json/src/main/resources/templates/
     - labels: [area/hibernate-reactive, area/persistence]
       title: "hibernate reactive"
-      notify: [aguibert, gavinking, Sanne]
+      notify: [DavideD, gavinking, Sanne]
       directories:
         - extensions/hibernate-reactive
     - labels: [area/hibernate-orm, area/persistence]
@@ -61,7 +61,8 @@ triage:
               title.match(/hibernate/i)
               && !title.match(/hibernate.validator/i)
               && !title.match(/hibernate.search/i)
-      notify: [gsmet, Sanne]
+              && !title.match(/hibernate.reactive/i)
+      notify: [gsmet, Sanne, yrodiere]
       directories:
         - extensions/hibernate-orm/
         - integration-tests/common-jpa-entities/
@@ -90,13 +91,13 @@ triage:
         - integration-tests/elasticsearch
     - labels: [area/hibernate-validator]
       title: hibernate validator
-      notify: [gsmet]
+      notify: [gsmet, yrodiere]
       directories:
         - extensions/hibernate-validator/
         - integration-tests/hibernate-validator/
     - labels: [area/jaeger]
       title: jaeger
-      notify: [kenfinnigan, pavolloffay]
+      notify: [kenfinnigan]
       directories:
         - extensions/jaeger/
     - labels: [area/kotlin]
@@ -188,7 +189,7 @@ triage:
         - extensions/rest-client/
     - labels: [area/smallrye]
       title: "smallrye"
-      notify: [kenfinnigan, phillip-kruger, jmartisk, radcortez, Ladicek]
+      notify: [phillip-kruger, jmartisk, radcortez, Ladicek]
       directories:
         - extensions/smallrye-
     - labels: [area/spring]
@@ -400,9 +401,9 @@ triage:
       directories:
         - extensions/undertow/
         - integration-tests/elytron-undertow/
-    - labels: [area/undertow-websockets]
+    - labels: [area/websockets]
       directories:
-        - extensions/undertow-websockets/
+        - extensions/websockets/
     - labels: [area/swagger-ui]
       title: swagger
       notify: [phillip-kruger]
@@ -426,3 +427,6 @@ triage:
       directories:
         - extensions/liquibase/
         - integration-tests/liquibase/
+    - labels: [kind/extension-proposal]
+      title: quarkiverse
+      notify: [gastaldi, gsmet, aloubyansky]

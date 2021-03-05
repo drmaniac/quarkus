@@ -7,14 +7,11 @@ import io.quarkus.devtools.commands.data.QuarkusCommandException;
 import io.quarkus.devtools.commands.data.QuarkusCommandInvocation;
 import io.quarkus.devtools.commands.data.QuarkusCommandOutcome;
 import io.quarkus.devtools.commands.handlers.CreateProjectCommandHandler;
-import io.quarkus.devtools.commands.handlers.LegacyCreateProjectCommandHandler;
 import io.quarkus.devtools.project.BuildTool;
 import io.quarkus.devtools.project.QuarkusProject;
 import io.quarkus.devtools.project.codegen.SourceType;
-import io.quarkus.platform.descriptor.QuarkusPlatformDescriptor;
 import io.quarkus.platform.tools.ToolsConstants;
 import io.quarkus.platform.tools.ToolsUtils;
-import java.nio.file.Path;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -38,21 +35,18 @@ public class CreateProject {
     public static final String NO_BUILDTOOL_WRAPPER = ToolsUtils.dotJoin(ToolsConstants.QUARKUS, NAME, "no-buildtool-wrapper");
     public static final String NO_EXAMPLES = ToolsUtils.dotJoin(ToolsConstants.QUARKUS, NAME, "no-examples");
     public static final String CODESTARTS = ToolsUtils.dotJoin(ToolsConstants.QUARKUS, NAME, "codestarts");
+    public static final String OVERRIDE_EXAMPLES = ToolsUtils.dotJoin(ToolsConstants.QUARKUS, NAME, "examples");
 
     private static final Pattern JAVA_VERSION_PATTERN = Pattern.compile("(?:1\\.)?(\\d+)(?:\\..*)?");
 
-    private boolean legacyCodegen = false;
-    private final Path projectDirPath;
-    private final QuarkusPlatformDescriptor platformDescr;
+    private QuarkusProject quarkusProject;
     private String javaTarget;
     private Set<String> extensions = new HashSet<>();
-    private BuildTool buildTool = BuildTool.MAVEN;
 
     private Map<String, Object> values = new HashMap<>();
 
-    public CreateProject(final Path projectDirPath, QuarkusPlatformDescriptor platformDescr) {
-        this.projectDirPath = requireNonNull(projectDirPath, "projectDirPath is required");
-        this.platformDescr = requireNonNull(platformDescr, "platformDescr is required");
+    public CreateProject(QuarkusProject project) {
+        this.quarkusProject = requireNonNull(project, "project is required");
     }
 
     public CreateProject groupId(String groupId) {
@@ -70,13 +64,24 @@ public class CreateProject {
         return this;
     }
 
+    @Deprecated
     public CreateProject quarkusMavenPluginVersion(String version) {
         setValue(QUARKUS_MAVEN_PLUGIN_VERSION, version);
         return this;
     }
 
+    @Deprecated
     public CreateProject quarkusGradlePluginVersion(String version) {
         setValue(QUARKUS_GRADLE_PLUGIN_VERSION, version);
+        return this;
+    }
+
+    public CreateProject quarkusPluginVersion(String version) {
+        if (quarkusProject.getBuildTool().equals(BuildTool.MAVEN)) {
+            setValue(QUARKUS_MAVEN_PLUGIN_VERSION, version);
+        } else {
+            setValue(QUARKUS_GRADLE_PLUGIN_VERSION, version);
+        }
         return this;
     }
 
@@ -134,40 +139,8 @@ public class CreateProject {
         return this;
     }
 
-    /**
-     * @deprecated As of release 1.10, codestarts are default. Legacy codegen is scheduled to be removed:
-     *             https://github.com/quarkusio/quarkus/issues/12897
-     */
-    @Deprecated
-    public CreateProject codestartsEnabled(boolean value) {
-        return this.legacyCodegen(!value);
-    }
-
-    /**
-     * @deprecated As of release 1.10, codestarts are default. Legacy codegen is scheduled to be removed:
-     *             https://github.com/quarkusio/quarkus/issues/12897
-     */
-    @Deprecated
-    public CreateProject codestartsEnabled() {
-        return this.legacyCodegen(false);
-    }
-
-    /**
-     * @deprecated As of release 1.10, codestarts are default. Legacy codegen is scheduled to be removed:
-     *             https://github.com/quarkusio/quarkus/issues/12897
-     */
-    @Deprecated
-    public CreateProject legacyCodegen() {
-        return this.legacyCodegen(true);
-    }
-
-    /**
-     * @deprecated As of release 1.10, codestarts are default. Legacy codegen is scheduled to be removed:
-     *             https://github.com/quarkusio/quarkus/issues/12897
-     */
-    @Deprecated
-    public CreateProject legacyCodegen(boolean value) {
-        this.legacyCodegen = value;
+    public CreateProject overrideExamples(Set<String> overrideExamples) {
+        setValue(OVERRIDE_EXAMPLES, overrideExamples);
         return this;
     }
 
@@ -205,11 +178,6 @@ public class CreateProject {
         return this;
     }
 
-    public CreateProject buildTool(BuildTool buildTool) {
-        this.buildTool = requireNonNull(buildTool, "buildTool is required");
-        return this;
-    }
-
     public boolean doCreateProject(final Map<String, Object> context) throws QuarkusCommandException {
         if (context != null && !context.isEmpty()) {
             for (Map.Entry<String, Object> entry : context.entrySet()) {
@@ -238,11 +206,7 @@ public class CreateProject {
             }
         }
         setValue(EXTENSIONS, extensions);
-        final QuarkusProject quarkusProject = QuarkusProject.of(projectDirPath, platformDescr, buildTool);
         final QuarkusCommandInvocation invocation = new QuarkusCommandInvocation(quarkusProject, values);
-        if (legacyCodegen) {
-            return new LegacyCreateProjectCommandHandler().execute(invocation);
-        }
         return new CreateProjectCommandHandler().execute(invocation);
     }
 

@@ -184,15 +184,7 @@ This will start a non-durable empty database: ideal for a quick experiment!
 
 ==== Setting up multiple persistence units
 
-[WARNING]
-====
-This feature is still experimental.
-It is considered stable and usable in production but the configuration properties and CDI integration might evolve depending on your feedback.
-
-If you are using this feature, any feedback (even just to say it fulfills your requirements) is very welcome on our link:{quarkus-mailing-list-index}[quarkus-dev mailing list].
-====
-
-Starting with Quarkus 1.8, you can define multiple persistence units using the Quarkus configuration properties approach.
+It is possible to define multiple persistence units using the Quarkus configuration properties.
 
 The properties at the root of the `quarkus.hibernate-orm.` namespace define the default persistence unit.
 For instance, the following snippet defines a default datasource and a default persistence unit:
@@ -246,6 +238,7 @@ You can point your persistence unit to the default datasource by setting it to `
 It is perfectly valid to have several persistence units pointing to the same datasource.
 ====
 
+[[multiple-persistence-units-attaching-model-classes]]
 ==== Attaching model classes to persistence units
 
 There are two ways to attach model classes to persistence units, and they should not be mixed:
@@ -350,7 +343,7 @@ You can inject the `EntityManagerFactory` of a named persistence unit using the 
 [source,java]
 ----
 @Inject
-@PersistenceUnit("users") <1>
+@PersistenceUnit("users")
 EntityManagerFactory entityManagerFactory;
 ----
 
@@ -451,7 +444,7 @@ But for development, these limitations are acceptable.
 
 The third approach is to use `quarkus.hibernate-orm.database.generation=none`.
 This approach is best when you are working on a copy of the production data but want to fully control the schema evolution.
-Or if you use a database schema migration tool like https://quarkus.io/guides/flyway[Flyway].
+Or if you use a database schema migration tool like link:flyway[Flyway].
 
 With this approach when making changes to an entity, make sure to adapt the database schema accordingly;
 you could also use `validate` to have Hibernate verify the schema matches its expectations.
@@ -460,7 +453,7 @@ WARNING: Do not use `quarkus.hibernate-orm.database.generation` `drop-and-create
 
 
 These approaches become really powerful when combined with Quarkus configuration profiles.
-You can define different https://quarkus.io/guides/config#configuration-profiles[configuration profiles]
+You can define different link:config#configuration-profiles[configuration profiles]
 to select different behaviors depending on your environment.
 This is great because you can define different combinations of Hibernate ORM properties matching the development style you currently need.
 
@@ -659,7 +652,7 @@ For more information about Hibernate Envers, see link:https://hibernate.org/orm/
 == Metrics
 Either link:micrometer[Micrometer] or link:microprofile-metrics[SmallRye Metrics] are
 capable of exposing metrics that Hibernate ORM collects at runtime. To enable exposure of Hibernate metrics
-on the `/metrics` endpoint, make sure your project depends on a metrics extension and set the configuration property `quarkus.hibernate-orm.metrics.enabled` to `true`.
+on the `/q/metrics` endpoint, make sure your project depends on a metrics extension and set the configuration property `quarkus.hibernate-orm.metrics.enabled` to `true`.
 When using link:microprofile-metrics[SmallRye Metrics], metrics will be available under the `vendor` scope.
 
 == Limitations and other things you should know
@@ -874,7 +867,7 @@ public class CustomTenantResolver implements TenantResolver {
 
 In general it is not possible to use the Hibernate ORM database generation feature in conjunction with a multitenancy setup.
 Therefore you have to disable it and you need to make sure that the tables are created per schema. 
-The following setup will use the link:https://quarkus.io/guides/flyway[Flyway] extension to achieve this goal.
+The following setup will use the link:flyway[Flyway] extension to achieve this goal.
 
 ==== SCHEMA approach
 

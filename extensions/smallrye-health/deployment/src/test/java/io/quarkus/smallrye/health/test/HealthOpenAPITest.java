@@ -13,7 +13,7 @@ import io.restassured.RestAssured;
 
 public class HealthOpenAPITest {
 
-    private static final String OPEN_API_PATH = "/openapi";
+    private static final String OPEN_API_PATH = "/q/openapi";
 
     @RegisterExtension
     static final QuarkusUnitTest config = new QuarkusUnitTest()
@@ -30,9 +30,9 @@ public class HealthOpenAPITest {
                 .when().get(OPEN_API_PATH)
                 .then()
                 .header("Content-Type", "application/json;charset=UTF-8")
-                .body("paths", Matchers.hasKey("/health/ready"))
-                .body("paths", Matchers.hasKey("/health/live"))
-                .body("paths", Matchers.hasKey("/health"))
+                .body("paths", Matchers.hasKey("/q/health/ready"))
+                .body("paths", Matchers.hasKey("/q/health/live"))
+                .body("paths", Matchers.hasKey("/q/health"))
                 .body("components.schemas.HealthCheckResponse.type", Matchers.equalTo("object"));
 
     }

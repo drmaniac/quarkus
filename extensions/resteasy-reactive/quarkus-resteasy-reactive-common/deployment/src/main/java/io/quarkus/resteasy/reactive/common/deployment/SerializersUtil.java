@@ -31,7 +31,8 @@ public class SerializersUtil {
             ResourceWriter writer = new ResourceWriter();
             writer.setBuiltin(additionalWriter.isBuiltin());
             String writerClassName = additionalWriter.getClassName();
-            writer.setFactory(FactoryUtils.factory(writerClassName, applicationResultBuildItem.getSingletonClasses(), recorder,
+            writer.setFactory(FactoryUtils.factory(writerClassName,
+                    applicationResultBuildItem.getResult().getSingletonClasses(), recorder,
                     beanContainerBuildItem));
             writer.setConstraint(additionalWriter.getRuntimeType());
             if (!additionalWriter.getMediaTypeStrings().isEmpty()) {
@@ -43,9 +44,10 @@ public class SerializersUtil {
         for (MessageBodyReaderBuildItem additionalReader : RuntimeTypeItem.filter(messageBodyReaderBuildItems,
                 runtimeType)) {
             ResourceReader reader = new ResourceReader();
-            reader.setBuiltin(false);
+            reader.setBuiltin(additionalReader.isBuiltin());
             String readerClassName = additionalReader.getClassName();
-            reader.setFactory(FactoryUtils.factory(readerClassName, applicationResultBuildItem.getSingletonClasses(), recorder,
+            reader.setFactory(FactoryUtils.factory(readerClassName,
+                    applicationResultBuildItem.getResult().getSingletonClasses(), recorder,
                     beanContainerBuildItem));
             reader.setConstraint(additionalReader.getRuntimeType());
             if (!additionalReader.getMediaTypeStrings().isEmpty()) {

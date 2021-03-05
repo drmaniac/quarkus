@@ -125,6 +125,7 @@
                         <parentFirstArtifact>io.quarkus:quarkus-bootstrap-core</parentFirstArtifact>
                         <parentFirstArtifact>io.quarkus:quarkus-development-mode-spi</parentFirstArtifact>
                         <parentFirstArtifact>io.quarkus:quarkus-bootstrap-app-model</parentFirstArtifact>
+                        <parentFirstArtifact>io.quarkus:quarkus-bootstrap-maven-resolver</parentFirstArtifact>
                         <parentFirstArtifact>org.slf4j:slf4j-api</parentFirstArtifact>
                         <parentFirstArtifact>org.jboss.slf4j:slf4j-jboss-logmanager</parentFirstArtifact>
                         <parentFirstArtifact>org.jboss.logmanager:jboss-logmanager-embedded</parentFirstArtifact>
@@ -147,6 +148,8 @@
                         <parentFirstArtifact>org.junit.platform:junit-platform-commons</parentFirstArtifact>
                         <parentFirstArtifact>org.junit.platform:junit-platform-engine</parentFirstArtifact>
                         <parentFirstArtifact>io.quarkus:quarkus-class-change-agent</parentFirstArtifact>
+                        <parentFirstArtifact>org.jacoco:org.jacoco.agent:runtime</parentFirstArtifact>
+                        <parentFirstArtifact>io.quarkus:quarkus-bootstrap-gradle-resolver</parentFirstArtifact>
                     </parentFirstArtifacts>
                     <runnerParentFirstArtifacts>
                         <runnerParentFirstArtifact>io.quarkus:quarkus-bootstrap-runner</runnerParentFirstArtifact>
@@ -158,6 +161,9 @@
                         <runnerParentFirstArtifact>org.wildfly.common:wildfly-common</runnerParentFirstArtifact>
                         <!-- This is needed because it contains some jar handling classes -->
                         <runnerParentFirstArtifact>io.smallrye.common:smallrye-common-io</runnerParentFirstArtifact>
+                        <!-- RestAssured uses groovy, which seems to do some things with soft references that
+                        prevent the ClassLoader from being GC'ed, see https://github.com/quarkusio/quarkus/issues/12498 -->
+                        <runnerParentFirstArtifact>org.codehaus.groovy:groovy</runnerParentFirstArtifact>
                     </runnerParentFirstArtifacts>
                     <excludedArtifacts>
                         <excludedArtifact>io.smallrye:smallrye-config</excludedArtifact>

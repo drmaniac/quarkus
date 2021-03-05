@@ -31,7 +31,6 @@ import de.flapdoodle.embed.mongo.config.RuntimeConfigBuilder;
 import de.flapdoodle.embed.mongo.distribution.Version;
 import de.flapdoodle.embed.process.config.IRuntimeConfig;
 import de.flapdoodle.embed.process.config.io.ProcessOutput;
-import de.flapdoodle.embed.process.runtime.Network;
 
 public class MongoWithReplicasTestBase {
 
@@ -46,7 +45,7 @@ public class MongoWithReplicasTestBase {
             List<IMongodConfig> configs = new ArrayList<>();
             for (int i = 0; i < 2; i++) {
                 int port = 27018 + i;
-                configs.add(buildMongodConfiguration("localhost", port, true));
+                configs.add(buildMongodConfiguration("127.0.0.1", port, true));
             }
             configs.forEach(config -> {
                 MongodExecutable exec = getMongodExecutable(config);
@@ -175,9 +174,16 @@ public class MongoWithReplicasTestBase {
 
     private static IMongodConfig buildMongodConfiguration(String url, int port, final boolean configureReplicaSet)
             throws IOException {
+        try {
+            //JDK bug workaround
+            //https://github.com/quarkusio/quarkus/issues/14424
+            //force class init to prevent possible deadlock when done by mongo threads
+            Class.forName("sun.net.ext.ExtendedSocketOptions", true, ClassLoader.getSystemClassLoader());
+        } catch (ClassNotFoundException e) {
+        }
         final MongodConfigBuilder builder = new MongodConfigBuilder()
                 .version(Version.Main.V4_0)
-                .net(new Net(url, port, Network.localhostIsIPv6()));
+                .net(new Net(url, port, false));
         if (configureReplicaSet) {
             builder.withLaunchArgument("--replSet", "test001");
             builder.cmdOptions(new MongoCmdOptionsBuilder()

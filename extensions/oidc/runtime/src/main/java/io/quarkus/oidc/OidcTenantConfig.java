@@ -7,11 +7,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 
+import io.quarkus.oidc.common.runtime.OidcCommonConfig;
 import io.quarkus.runtime.annotations.ConfigGroup;
 import io.quarkus.runtime.annotations.ConfigItem;
 
 @ConfigGroup
-public class OidcTenantConfig {
+public class OidcTenantConfig extends OidcCommonConfig {
 
     /**
      * A unique tenant identifier. It must be set by {@code TenantConfigResolver} providers which
@@ -33,40 +34,12 @@ public class OidcTenantConfig {
     public ApplicationType applicationType = ApplicationType.SERVICE;
 
     /**
-     * The base URL of the OpenID Connect (OIDC) server, for example, 'https://host:port/auth'.
-     * OIDC discovery endpoint will be called by default by appending a '.well-known/openid-configuration' path to this URL.
-     * Note if you work with Keycloak OIDC server, make sure the base URL is in the following format:
-     * 'https://host:port/auth/realms/{realm}' where '{realm}' has to be replaced by the name of the Keycloak realm.
-     */
-    @ConfigItem
-    public Optional<String> authServerUrl = Optional.empty();
-
-    /**
-     * Enables OIDC discovery.
-     * If the discovery is disabled then the following properties must be configured:
-     * - 'authorization-path' and 'token-path' for the 'web-app' applications
-     * - 'jwks-path' or 'introspection-path' for both the 'web-app' and 'service' applications
-     * <p>
-     * 'web-app' applications may also have 'user-info-path' and 'end-session-path' properties configured.
-     */
-    @ConfigItem(defaultValue = "true")
-    public boolean discoveryEnabled = true;
-
-    /**
      * Relative path of the OIDC authorization endpoint which authenticates the users.
      * This property must be set for the 'web-app' applications if OIDC discovery is disabled.
      * This property will be ignored if the discovery is enabled.
      */
     @ConfigItem
     public Optional<String> authorizationPath = Optional.empty();
-
-    /**
-     * Relative path of the OIDC token endpoint which issues ID, access and refresh tokens.
-     * This property must be set for the 'web-app' applications if OIDC discovery is disabled.
-     * This property will be ignored if the discovery is enabled.
-     */
-    @ConfigItem
-    public Optional<String> tokenPath = Optional.empty();
 
     /**
      * Relative path of the OIDC userinfo endpoint.
@@ -104,24 +77,11 @@ public class OidcTenantConfig {
     public Optional<String> endSessionPath = Optional.empty();
 
     /**
-     * The maximum amount of time the adapter will try connecting to the currently unavailable OIDC server for.
-     * For example, setting it to '20S' will let the adapter keep requesting the connection for up to 20 seconds.
-     */
-    @ConfigItem
-    public Optional<Duration> connectionDelay = Optional.empty();
-
-    /**
      * Public key for the local JWT token verification.
      * OIDC server connection will not be created when this property is set.
      */
     @ConfigItem
     public Optional<String> publicKey = Optional.empty();
-
-    /**
-     * The client-id of the application. Each application has a client-id that is used to identify the application
-     */
-    @ConfigItem
-    public Optional<String> clientId = Optional.empty();
 
     /**
      * Configuration to find and parse a custom claim containing the roles information.
@@ -136,16 +96,10 @@ public class OidcTenantConfig {
     public Token token = new Token();
 
     /**
-     * Credentials which the OIDC adapter will use to authenticate to the OIDC server.
+     * Logout configuration
      */
     @ConfigItem
-    public Credentials credentials = new Credentials();
-
-    /**
-     * Options to configure a proxy that OIDC adapter will use for talking with OIDC server.
-     */
-    @ConfigItem
-    public Proxy proxy = new Proxy();
+    public Logout logout = new Logout();
 
     /**
      * Different options to configure authorization requests
@@ -153,51 +107,10 @@ public class OidcTenantConfig {
     public Authentication authentication = new Authentication();
 
     /**
-     * TLS configurations
-     */
-    @ConfigItem
-    public Tls tls = new Tls();
-
-    /**
-     * Logout configuration
-     */
-    @ConfigItem
-    public Logout logout = new Logout();
-
-    /**
      * Default token state manager configuration
      */
     @ConfigItem
     public TokenStateManager tokenStateManager = new TokenStateManager();
-
-    @ConfigGroup
-    public static class Tls {
-        public enum Verification {
-            /**
-             * Certificates are validated and hostname verification is enabled. This is the default value.
-             */
-            REQUIRED,
-            /**
-             * All certificated are trusted and hostname verification is disabled.
-             */
-            NONE
-        }
-
-        /**
-         * Certificate validation and hostname verification, which can be one of the following values from enum
-         * {@link Verification}. Default is required.
-         */
-        public Optional<Verification> verification = Optional.empty();
-
-        public Optional<Verification> getVerification() {
-            return verification;
-        }
-
-        public void setVerification(Verification verification) {
-            this.verification = Optional.ofNullable(verification);
-        }
-
-    }
 
     @ConfigGroup
     public static class Logout {
@@ -249,7 +162,12 @@ public class OidcTenantConfig {
             /**
              * Keep ID token only
              */
-            ID_TOKEN
+            ID_TOKEN,
+
+            /**
+             * Keep ID and refresh tokens only
+             */
+            ID_REFRESH_TOKENS
         }
 
         /**
@@ -284,36 +202,12 @@ public class OidcTenantConfig {
         }
     }
 
-    public Optional<Duration> getConnectionDelay() {
-        return connectionDelay;
-    }
-
-    public void setConnectionDelay(Duration connectionDelay) {
-        this.connectionDelay = Optional.of(connectionDelay);
-    }
-
-    public Optional<String> getAuthServerUrl() {
-        return authServerUrl;
-    }
-
-    public void setAuthServerUrl(String authServerUrl) {
-        this.authServerUrl = Optional.of(authServerUrl);
-    }
-
     public Optional<String> getAuthorizationPath() {
         return authorizationPath;
     }
 
     public void setAuthorizationPath(String authorizationPath) {
         this.authorizationPath = Optional.of(authorizationPath);
-    }
-
-    public Optional<String> getTokenPath() {
-        return tokenPath;
-    }
-
-    public void setTokenPath(String tokenPath) {
-        this.tokenPath = Optional.of(tokenPath);
     }
 
     public Optional<String> getUserInfoPath() {
@@ -356,14 +250,6 @@ public class OidcTenantConfig {
         this.publicKey = Optional.of(publicKey);
     }
 
-    public Optional<String> getClientId() {
-        return clientId;
-    }
-
-    public void setClientId(String clientId) {
-        this.clientId = Optional.of(clientId);
-    }
-
     public Roles getRoles() {
         return roles;
     }
@@ -378,14 +264,6 @@ public class OidcTenantConfig {
 
     public void setToken(Token token) {
         this.token = token;
-    }
-
-    public Credentials getCredentials() {
-        return credentials;
-    }
-
-    public void setCredentials(Credentials credentials) {
-        this.credentials = credentials;
     }
 
     public Authentication getAuthentication() {
@@ -412,161 +290,12 @@ public class OidcTenantConfig {
         this.tenantEnabled = enabled;
     }
 
-    public boolean isDiscoveryEnabled() {
-        return discoveryEnabled;
-    }
-
-    public void setDiscoveryEnabled(boolean enabled) {
-        this.discoveryEnabled = enabled;
-    }
-
-    public Proxy getProxy() {
-        return proxy;
-    }
-
-    public void setProxy(Proxy proxy) {
-        this.proxy = proxy;
-    }
-
     public void setLogout(Logout logout) {
         this.logout = logout;
     }
 
     public Logout getLogout() {
         return logout;
-    }
-
-    @ConfigGroup
-    public static class Credentials {
-
-        /**
-         * Client secret which is used for a 'client_secret_basic' authentication method.
-         * Note that a 'client-secret.value' can be used instead but both properties are mutually exclusive.
-         */
-        @ConfigItem
-        public Optional<String> secret = Optional.empty();
-
-        /**
-         * Client secret which can be used for the 'client_secret_basic' (default) and 'client_secret_post'
-         * and 'client_secret_jwt' authentication methods.
-         * Note that a 'secret.value' property can be used instead to support the 'client_secret_basic' method
-         * but both properties are mutually exclusive.
-         */
-        @ConfigItem
-        public Secret clientSecret = new Secret();
-
-        /**
-         * Client JWT authentication methods
-         */
-        @ConfigItem
-        public Jwt jwt = new Jwt();
-
-        public Optional<String> getSecret() {
-            return secret;
-        }
-
-        public void setSecret(String secret) {
-            this.secret = Optional.of(secret);
-        }
-
-        public Secret getClientSecret() {
-            return clientSecret;
-        }
-
-        public void setClientSecret(Secret clientSecret) {
-            this.clientSecret = clientSecret;
-        }
-
-        /**
-         * Supports the client authentication methods which involve sending a client secret.
-         *
-         * @see <a href=
-         *      "https://openid.net/specs/openid-connect-core-1_0.html#ClientAuthentication">https://openid.net/specs/openid-connect-core-1_0.html#ClientAuthentication</a>
-         */
-        @ConfigGroup
-        public static class Secret {
-
-            public static enum Method {
-                /**
-                 * client_secret_basic (default): client id and secret are submitted with the HTTP Authorization Basic scheme
-                 */
-                BASIC,
-
-                /**
-                 * client_secret_post: client id and secret are submitted as the 'client_id' and 'client_secret' form
-                 * parameters.
-                 */
-                POST
-            }
-
-            /**
-             * The client secret
-             */
-            @ConfigItem
-            public Optional<String> value = Optional.empty();
-
-            /**
-             * Authentication method.
-             */
-            @ConfigItem
-            public Optional<Method> method = Optional.empty();
-
-            public Optional<String> getValue() {
-                return value;
-            }
-
-            public void setValue(String value) {
-                this.value = Optional.of(value);
-            }
-
-            public Optional<Method> getMethod() {
-                return method;
-            }
-
-            public void setMethod(Method method) {
-                this.method = Optional.of(method);
-            }
-        }
-
-        /**
-         * Supports the client authentication methods which involve sending a signed JWT token.
-         * Currently only 'client_secret_jwt' is supported
-         *
-         * @see <a href=
-         *      "https://openid.net/specs/openid-connect-core-1_0.html#ClientAuthentication">https://openid.net/specs/openid-connect-core-1_0.html#ClientAuthentication</a>
-         */
-        @ConfigGroup
-        public static class Jwt {
-            /**
-             * client_secret_jwt: JWT which includes client id as one of its claims is signed by the client secret and is
-             * submitted as a 'client_assertion' form parameter, while 'client_assertion_type' parameter is set to
-             * "urn:ietf:params:oauth:client-assertion-type:jwt-bearer".
-             */
-            @ConfigItem
-            public Optional<String> secret = Optional.empty();
-
-            /**
-             * JWT life-span in seconds. It will be added to the time it was issued at to calculate the expiration time.
-             */
-            @ConfigItem(defaultValue = "10")
-            public int lifespan = 10;
-
-            public Optional<String> getSecret() {
-                return secret;
-            }
-
-            public void setSecret(String secret) {
-                this.secret = Optional.of(secret);
-            }
-
-            public int getLifespan() {
-                return lifespan;
-            }
-
-            public void setLifespan(int lifespan) {
-                this.lifespan = lifespan;
-            }
-        }
     }
 
     @ConfigGroup
@@ -716,11 +445,28 @@ public class OidcTenantConfig {
         public Map<String, String> extraParams;
 
         /**
-         * Cookie path parameter value which, if set, will be used for the session, state and post logout cookies.
-         * It may need to be set when the redirect path has a root different to that of the original request URL.
+         * If enabled the state, session and post logout cookies will have their 'secure' parameter set to 'true'
+         * when HTTP is used. It may be necessary when running behind an SSL terminating reverse proxy.
+         * The cookies will always be secure if HTTPS is used even if this property is set to false.
+         */
+        @ConfigItem(defaultValue = "false")
+        public boolean cookieForceSecure;
+
+        /**
+         * Cookie path parameter value which, if set, will be used to set a path parameter for the session, state and post
+         * logout cookies.
+         * The `cookie-path-header` property, if set, will be checked first.
          */
         @ConfigItem
         public Optional<String> cookiePath = Optional.empty();
+
+        /**
+         * Cookie path header parameter value which, if set, identifies the incoming HTTP header
+         * whose value will be used to set a path parameter for the session, state and post logout cookies.
+         * If the header is missing then the `cookie-path` property will be checked.
+         */
+        @ConfigItem
+        public Optional<String> cookiePathHeader = Optional.empty();
 
         /**
          * Cookie domain parameter value which, if set, will be used for the session, state and post logout cookies.
@@ -805,6 +551,14 @@ public class OidcTenantConfig {
             this.restorePathAfterRedirect = restorePathAfterRedirect;
         }
 
+        public boolean isCookieForceSecure() {
+            return cookieForceSecure;
+        }
+
+        public void setCookieForceSecure(boolean cookieForceSecure) {
+            this.cookieForceSecure = cookieForceSecure;
+        }
+
         public Optional<String> getCookiePath() {
             return cookiePath;
         }
@@ -851,6 +605,14 @@ public class OidcTenantConfig {
 
         public void setSessionAgeExtension(Duration sessionAgeExtension) {
             this.sessionAgeExtension = sessionAgeExtension;
+        }
+
+        public Optional<String> getCookiePathHeader() {
+            return cookiePathHeader;
+        }
+
+        public void setCookiePathHeader(String cookiePathHeader) {
+            this.cookiePathHeader = Optional.of(cookiePathHeader);
         }
 
     }
@@ -924,13 +686,28 @@ public class OidcTenantConfig {
 
         /**
          * Token auto-refresh interval in seconds during the user re-authentication.
-         * If this option is set then the valid ID token will be refreshed if it will expire in less than a number of minutes
+         * If this option is set then the valid ID token will be refreshed if it will expire in less than a number of seconds
          * set by this option. The user will still be authenticated if the ID token can no longer be refreshed but is still
          * valid.
          * This option will be ignored if the 'refresh-expired' property is not enabled.
+         *
+         * Note this property is deprecated and will be removed in one of the next releases.
+         * Please use 'quarkus.oidc.token.refresh-token-time-skew'
          */
         @ConfigItem
+        @Deprecated
         public Optional<Duration> autoRefreshInterval = Optional.empty();
+
+        /**
+         * Refresh token time skew in seconds.
+         * If this property is enabled then the configured number of seconds is added to the current time
+         * when checking whether the access token should be refreshed. If the sum is greater than this access token's
+         * expiration time then a refresh is going to happen.
+         *
+         * This property will be ignored if the 'refresh-expired' property is not enabled.
+         */
+        @ConfigItem
+        public Optional<Duration> refreshTokenTimeSkew = Optional.empty();
 
         /**
          * Forced JWK set refresh interval in minutes.
@@ -944,6 +721,18 @@ public class OidcTenantConfig {
          */
         @ConfigItem
         public Optional<String> header = Optional.empty();
+
+        /**
+         * Allow the remote introspection of JWT tokens when no matching JWK key is available.
+         *
+         * Note this property is set to 'true' by default for backward-compatibility reasons and will be set to `false`
+         * instead in one of the next releases.
+         *
+         * Also note this property will be ignored if JWK endpoint URI is not available and introspecting the tokens is
+         * the only verification option.
+         */
+        @ConfigItem(defaultValue = "true")
+        public boolean allowJwtIntrospection = true;
 
         public Optional<String> getIssuer() {
             return issuer;
@@ -1008,37 +797,22 @@ public class OidcTenantConfig {
         public void setTokenType(String tokenType) {
             this.tokenType = Optional.of(tokenType);
         }
-    }
 
-    @ConfigGroup
-    public static class Proxy {
+        public Optional<Duration> getRefreshTokenTimeSkew() {
+            return refreshTokenTimeSkew;
+        }
 
-        /**
-         * The host (name or IP address) of the Proxy.<br/>
-         * Note: If OIDC adapter needs to use a Proxy to talk with OIDC server (Provider),
-         * then at least the "host" config item must be configured to enable the usage of a Proxy.
-         */
-        @ConfigItem
-        public Optional<String> host = Optional.empty();
+        public void setRefreshTokenTimeSkew(Duration refreshTokenTimeSkew) {
+            this.refreshTokenTimeSkew = Optional.of(refreshTokenTimeSkew);
+        }
 
-        /**
-         * The port number of the Proxy. Default value is 80.
-         */
-        @ConfigItem(defaultValue = "80")
-        public int port = 80;
+        public boolean isAllowJwtIntrospection() {
+            return allowJwtIntrospection;
+        }
 
-        /**
-         * The username, if Proxy needs authentication.
-         */
-        @ConfigItem
-        public Optional<String> username = Optional.empty();
-
-        /**
-         * The password, if Proxy needs authentication.
-         */
-        @ConfigItem
-        public Optional<String> password = Optional.empty();
-
+        public void setAllowJwtIntrospection(boolean allowJwtIntrospection) {
+            this.allowJwtIntrospection = allowJwtIntrospection;
+        }
     }
 
     public static enum ApplicationType {

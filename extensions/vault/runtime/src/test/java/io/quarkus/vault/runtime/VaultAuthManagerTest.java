@@ -9,11 +9,13 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.runtime.TlsConfig;
-import io.quarkus.vault.runtime.client.OkHttpVaultClient;
+import io.quarkus.vault.runtime.client.VaultClient;
 import io.quarkus.vault.runtime.client.VaultClientException;
+import io.quarkus.vault.runtime.client.VertxVaultClient;
 import io.quarkus.vault.runtime.client.dto.auth.VaultLookupSelf;
 import io.quarkus.vault.runtime.client.dto.auth.VaultRenewSelf;
 import io.quarkus.vault.runtime.client.dto.auth.VaultRenewSelfAuth;
@@ -21,21 +23,27 @@ import io.quarkus.vault.runtime.client.dto.auth.VaultUserPassAuth;
 import io.quarkus.vault.runtime.client.dto.auth.VaultUserPassAuthAuth;
 import io.quarkus.vault.runtime.config.VaultAppRoleAuthenticationConfig;
 import io.quarkus.vault.runtime.config.VaultAuthenticationConfig;
+import io.quarkus.vault.runtime.config.VaultBootstrapConfig;
 import io.quarkus.vault.runtime.config.VaultKubernetesAuthenticationConfig;
-import io.quarkus.vault.runtime.config.VaultRuntimeConfig;
 import io.quarkus.vault.runtime.config.VaultTlsConfig;
 import io.quarkus.vault.runtime.config.VaultUserpassAuthenticationConfig;
 
 public class VaultAuthManagerTest {
 
-    VaultRuntimeConfig config = createConfig();
+    VaultBootstrapConfig config = createConfig();
     TlsConfig tlsConfig = new TlsConfig();
     AtomicBoolean lookupSelfShouldReturn403 = new AtomicBoolean(false);
-    OkHttpVaultClient vaultClient = createVaultClient();
-    VaultAuthManager vaultAuthManager = new VaultAuthManager(vaultClient, config);
+    VaultConfigHolder vaultConfigHolder = new VaultConfigHolder().setVaultBootstrapConfig(config);
+    VaultClient vaultClient = createVaultClient();
+    VaultAuthManager vaultAuthManager = new VaultAuthManager(vaultConfigHolder, vaultClient);
     VaultUserPassAuth vaultUserPassAuth = new VaultUserPassAuth();
     VaultLookupSelf vaultLookupSelf = new VaultLookupSelf();
     VaultRenewSelf vaultRenewSelf = new VaultRenewSelf();
+
+    @AfterEach
+    public void after() {
+        vaultClient.close();
+    }
 
     @Test
     public void login() {
@@ -89,9 +97,9 @@ public class VaultAuthManagerTest {
         assertEquals("6", token.clientToken, "expires soon");
     }
 
-    private VaultRuntimeConfig createConfig() {
+    private VaultBootstrapConfig createConfig() {
         try {
-            VaultRuntimeConfig config = new VaultRuntimeConfig();
+            VaultBootstrapConfig config = new VaultBootstrapConfig();
             config.tls = new VaultTlsConfig();
             config.authentication = new VaultAuthenticationConfig();
             config.authentication.kubernetes = new VaultKubernetesAuthenticationConfig();
@@ -118,8 +126,8 @@ public class VaultAuthManagerTest {
         }
     }
 
-    private OkHttpVaultClient createVaultClient() {
-        return new OkHttpVaultClient(config, tlsConfig) {
+    private VaultClient createVaultClient() {
+        VertxVaultClient vaultClient = new VertxVaultClient(vaultConfigHolder, tlsConfig) {
             @Override
             public VaultUserPassAuth loginUserPass(String user, String password) {
                 return vaultUserPassAuth;
@@ -138,6 +146,8 @@ public class VaultAuthManagerTest {
                 return vaultRenewSelf;
             }
         };
+        vaultClient.init();
+        return vaultClient;
     }
 
 }

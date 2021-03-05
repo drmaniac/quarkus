@@ -28,6 +28,7 @@ import javax.enterprise.inject.Default;
 
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.Location;
+import org.flywaydb.core.api.callback.Callback;
 import org.flywaydb.core.api.migration.JavaMigration;
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
@@ -52,6 +53,7 @@ import io.quarkus.deployment.builditem.IndexDependencyBuildItem;
 import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
+import io.quarkus.deployment.builditem.nativeimage.RuntimeReinitializedClassBuildItem;
 import io.quarkus.deployment.recording.RecorderContext;
 import io.quarkus.flyway.runtime.FlywayBuildTimeConfig;
 import io.quarkus.flyway.runtime.FlywayContainerProducer;
@@ -89,7 +91,7 @@ class FlywayProcessor {
             FlywayRecorder recorder,
             RecorderContext context,
             CombinedIndexBuildItem combinedIndexBuildItem,
-            List<JdbcDataSourceBuildItem> jdbcDataSourceBuildItems) throws IOException, URISyntaxException {
+            List<JdbcDataSourceBuildItem> jdbcDataSourceBuildItems) throws Exception {
 
         featureProducer.produce(new FeatureBuildItem(Feature.FLYWAY));
 
@@ -102,6 +104,13 @@ class FlywayProcessor {
         addJavaMigrations(combinedIndexBuildItem.getIndex().getAllKnownImplementors(JAVA_MIGRATION), context,
                 reflectiveClassProducer, javaMigrationClasses);
         recorder.setApplicationMigrationClasses(javaMigrationClasses);
+
+        final Map<String, Collection<Callback>> callbacks = FlywayCallbacksLocator.with(
+                dataSourceNames,
+                flywayBuildConfig,
+                combinedIndexBuildItem,
+                reflectiveClassProducer).getCallbacks();
+        recorder.setApplicationCallbackClasses(callbacks);
 
         resourceProducer.produce(new NativeImageResourceBuildItem(applicationMigrations.toArray(new String[0])));
     }
@@ -132,6 +141,8 @@ class FlywayProcessor {
                 .setDefaultScope(DotNames.SINGLETON).build());
         // add the @FlywayDataSource class otherwise it won't registered as a qualifier
         additionalBeans.produce(AdditionalBeanBuildItem.builder().addBeanClass(FlywayDataSource.class).build());
+
+        recorder.resetFlywayContainers();
 
         Collection<String> dataSourceNames = getDataSourceNames(jdbcDataSourceBuildItems);
 
@@ -182,11 +193,6 @@ class FlywayProcessor {
                 .map(flywayBuildConfig::getConfigForDataSourceName)
                 .flatMap(config -> config.locations.stream())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-
-        if (DataSourceUtil.hasDefault(dataSourceNames)) {
-            migrationLocations.addAll(flywayBuildConfig.defaultDataSource.locations);
-        }
-
         return migrationLocations;
     }
 
@@ -271,4 +277,12 @@ class FlywayProcessor {
         return FileSystems.newFileSystem(uri, env);
     }
 
+    /**
+     * Reinitialize {@code InsertRowLock} to avoid using a cached seed when invoking {@code getNextRandomString}
+     */
+    @BuildStep
+    public RuntimeReinitializedClassBuildItem reinitInsertRowLock() {
+        return new RuntimeReinitializedClassBuildItem(
+                "org.flywaydb.core.internal.database.InsertRowLock");
+    }
 }

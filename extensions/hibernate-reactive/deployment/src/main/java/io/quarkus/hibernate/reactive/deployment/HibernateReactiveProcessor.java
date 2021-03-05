@@ -24,6 +24,7 @@ import org.hibernate.jpa.boot.internal.ParsedPersistenceXmlDescriptor;
 import org.hibernate.loader.BatchFetchStyle;
 
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
+import io.quarkus.datasource.deployment.spi.DefaultDataSourceDbKindBuildItem;
 import io.quarkus.datasource.runtime.DataSourcesBuildTimeConfig;
 import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.Feature;
@@ -40,6 +41,7 @@ import io.quarkus.deployment.builditem.SystemPropertyBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.configuration.ConfigurationError;
+import io.quarkus.deployment.pkg.builditem.CurateOutcomeBuildItem;
 import io.quarkus.deployment.recording.RecorderContext;
 import io.quarkus.hibernate.orm.deployment.HibernateConfigUtil;
 import io.quarkus.hibernate.orm.deployment.HibernateOrmConfig;
@@ -119,7 +121,9 @@ public final class HibernateReactiveProcessor {
             BuildProducer<SystemPropertyBuildItem> systemProperties,
             BuildProducer<NativeImageResourceBuildItem> nativeImageResources,
             BuildProducer<HotDeploymentWatchedFileBuildItem> hotDeploymentWatchedFiles,
-            BuildProducer<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptors) {
+            BuildProducer<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptors,
+            List<DefaultDataSourceDbKindBuildItem> defaultDataSourceDbKindBuildItems,
+            CurateOutcomeBuildItem curateOutcomeBuildItem) {
 
         final boolean enableHR = hasEntities(domainObjects, nonJpaModelBuildItems);
         if (!enableHR) {
@@ -139,7 +143,8 @@ public final class HibernateReactiveProcessor {
         }
 
         // we only support the default pool for now
-        Optional<String> dbKindOptional = dataSourcesBuildTimeConfig.defaultDataSource.dbKind;
+        Optional<String> dbKindOptional = DefaultDataSourceDbKindBuildItem.resolve(
+                dataSourcesBuildTimeConfig.defaultDataSource.dbKind, defaultDataSourceDbKindBuildItems, curateOutcomeBuildItem);
         if (dbKindOptional.isPresent()) {
             final String dbKind = dbKindOptional.get();
             ParsedPersistenceXmlDescriptor reactivePU = generateReactivePersistenceUnit(
@@ -151,24 +156,30 @@ public final class HibernateReactiveProcessor {
             // - this is Reactive
             // - we don't support starting Hibernate Reactive from a persistence.xml
             // - we don't support Hibernate Envers with Hibernate Reactive
-            persistenceUnitDescriptors.produce(new PersistenceUnitDescriptorBuildItem(reactivePU, true, false, false));
+            persistenceUnitDescriptors.produce(new PersistenceUnitDescriptorBuildItem(reactivePU, true, false));
         }
 
     }
 
     @BuildStep
-    @Record(RUNTIME_INIT)
-    PersistenceProviderSetUpBuildItem setUpPersistenceProviderAndWaitForVertxPool(
-            HibernateReactiveRecorder recorder,
-            List<VertxPoolBuildItem> vertxPool,
-            HibernateOrmRuntimeConfig hibernateOrmRuntimeConfig,
+    void waitForVertxPool(List<VertxPoolBuildItem> vertxPool,
+            List<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptorBuildItems,
             BuildProducer<HibernateOrmIntegrationRuntimeConfiguredBuildItem> runtimeConfigured) {
-        recorder.initializePersistenceProvider(hibernateOrmRuntimeConfig);
+        for (PersistenceUnitDescriptorBuildItem puDescriptor : persistenceUnitDescriptorBuildItems) {
+            // Define a dependency on VertxPoolBuildItem to ensure that any Pool instances are available
+            // when HibernateORM starts its persistence units
+            runtimeConfigured.produce(new HibernateOrmIntegrationRuntimeConfiguredBuildItem(HIBERNATE_REACTIVE,
+                    puDescriptor.getPersistenceUnitName()));
+        }
+    }
 
-        // Define a dependency on VertxPoolBuildItem to ensure that any Pool instances are available
-        // when HibernateORM starts its persistence units
-        runtimeConfigured.produce(new HibernateOrmIntegrationRuntimeConfiguredBuildItem(HIBERNATE_REACTIVE));
-
+    @BuildStep
+    @Record(RUNTIME_INIT)
+    PersistenceProviderSetUpBuildItem setUpPersistenceProviderAndWaitForVertxPool(HibernateReactiveRecorder recorder,
+            HibernateOrmRuntimeConfig hibernateOrmRuntimeConfig,
+            List<HibernateOrmIntegrationRuntimeConfiguredBuildItem> integrationBuildItems) {
+        recorder.initializePersistenceProvider(hibernateOrmRuntimeConfig,
+                HibernateOrmIntegrationRuntimeConfiguredBuildItem.collectDescriptors(integrationBuildItems));
         return new PersistenceProviderSetUpBuildItem();
     }
 
@@ -202,7 +213,7 @@ public final class HibernateReactiveProcessor {
         // we found one
         ParsedPersistenceXmlDescriptor desc = new ParsedPersistenceXmlDescriptor(null); //todo URL
         desc.setName("default-reactive");
-        desc.setTransactionType(PersistenceUnitTransactionType.JTA);
+        desc.setTransactionType(PersistenceUnitTransactionType.RESOURCE_LOCAL);
         desc.getProperties().setProperty(AvailableSettings.DIALECT, dialectClassName);
         desc.setExcludeUnlistedClasses(true);
         desc.addClasses(new ArrayList<>(domainObjects.getAllModelClassNames()));

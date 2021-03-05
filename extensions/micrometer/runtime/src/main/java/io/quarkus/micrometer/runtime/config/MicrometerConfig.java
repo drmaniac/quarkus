@@ -91,6 +91,9 @@ public final class MicrometerConfig {
     /** Build / static runtime config for binders */
     @ConfigGroup
     public static class BinderConfig {
+        public HttpClientConfigGroup httpClient;
+        public HttpServerConfigGroup httpServer;
+
         /**
          * Micrometer JVM metrics support.
          * <p>
@@ -99,8 +102,8 @@ public final class MicrometerConfig {
         @ConfigItem(defaultValue = "true")
         public boolean jvm;
 
-        public KafkaConfig kafka;
-        public MicroprofileMetricsConfig mpMetrics;
+        public KafkaConfigGroup kafka;
+        public MPMetricsConfigGroup mpMetrics;
 
         /**
          * Micrometer System metrics support.
@@ -110,20 +113,14 @@ public final class MicrometerConfig {
         @ConfigItem(defaultValue = "true")
         public boolean system;
 
-        public VertxConfig vertx;
+        public VertxConfigGroup vertx;
     }
 
     /** Build / static runtime config for exporters */
     @ConfigGroup
     public static class ExportConfig {
-        public AzureMonitorConfig azuremonitor;
-        public DatadogConfig datadog;
-        public JmxConfig jmx;
-        public JsonConfig json;
-        public PrometheusConfig prometheus;
-        public SignalFxConfig signalfx;
-        public StackdriverConfig stackdriver;
-        public StatsdConfig statsd;
+        public JsonConfigGroup json;
+        public PrometheusConfigGroup prometheus;
     }
 
     public static interface CapabilityEnabled {

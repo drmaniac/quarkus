@@ -3,7 +3,10 @@ package io.quarkus.swaggerui.deployment;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import io.quarkus.bootstrap.model.AppArtifact;
 import io.quarkus.builder.Version;
@@ -14,7 +17,9 @@ import io.quarkus.deployment.annotations.ExecutionTime;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.GeneratedResourceBuildItem;
+import io.quarkus.deployment.builditem.HotDeploymentWatchedFileBuildItem;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
+import io.quarkus.deployment.builditem.LiveReloadBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.deployment.configuration.ConfigurationError;
 import io.quarkus.deployment.pkg.builditem.CurateOutcomeBuildItem;
@@ -23,9 +28,10 @@ import io.quarkus.smallrye.openapi.common.deployment.SmallRyeOpenApiConfig;
 import io.quarkus.swaggerui.runtime.SwaggerUiRecorder;
 import io.quarkus.swaggerui.runtime.SwaggerUiRuntimeConfig;
 import io.quarkus.vertx.http.deployment.HttpRootPathBuildItem;
+import io.quarkus.vertx.http.deployment.NonApplicationRootPathBuildItem;
 import io.quarkus.vertx.http.deployment.RouteBuildItem;
 import io.quarkus.vertx.http.deployment.devmode.NotFoundPageDisplayableEndpointBuildItem;
-import io.smallrye.openapi.ui.IndexCreator;
+import io.smallrye.openapi.ui.IndexHtmlCreator;
 import io.smallrye.openapi.ui.Option;
 import io.smallrye.openapi.ui.ThemeHref;
 import io.vertx.core.Handler;
@@ -38,6 +44,15 @@ public class SwaggerUiProcessor {
     private static final String SWAGGER_UI_WEBJAR_PREFIX = "META-INF/resources/openapi-ui/";
     private static final String SWAGGER_UI_FINAL_DESTINATION = "META-INF/swagger-ui-files";
 
+    // Branding files to monitor for changes
+    private static final String BRANDING_DIR = "META-INF/branding/";
+    private static final String BRANDING_LOGO_GENERAL = BRANDING_DIR + "logo.png";
+    private static final String BRANDING_LOGO_MODULE = BRANDING_DIR + "smallrye-open-api-ui.png";
+    private static final String BRANDING_STYLE_GENERAL = BRANDING_DIR + "style.css";
+    private static final String BRANDING_STYLE_MODULE = BRANDING_DIR + "smallrye-open-api-ui.css";
+    private static final String BRANDING_FAVICON_GENERAL = BRANDING_DIR + "favicon.ico";
+    private static final String BRANDING_FAVICON_MODULE = BRANDING_DIR + "smallrye-open-api-ui.ico";
+
     @BuildStep
     void feature(BuildProducer<FeatureBuildItem> feature,
             LaunchModeBuildItem launchMode,
@@ -48,16 +63,29 @@ public class SwaggerUiProcessor {
     }
 
     @BuildStep
+    List<HotDeploymentWatchedFileBuildItem> brandingFiles() {
+        return Stream.of(BRANDING_LOGO_GENERAL,
+                BRANDING_STYLE_GENERAL,
+                BRANDING_FAVICON_GENERAL,
+                BRANDING_LOGO_MODULE,
+                BRANDING_STYLE_MODULE,
+                BRANDING_FAVICON_MODULE).map(HotDeploymentWatchedFileBuildItem::new)
+                .collect(Collectors.toList());
+    }
+
+    @BuildStep
     public void getSwaggerUiFinalDestination(
             BuildProducer<GeneratedResourceBuildItem> generatedResources,
             BuildProducer<NativeImageResourceBuildItem> nativeImageResourceBuildItemBuildProducer,
             BuildProducer<SwaggerUiBuildItem> swaggerUiBuildProducer,
-            HttpRootPathBuildItem httpRootPathBuildItem,
+            NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem,
             BuildProducer<NotFoundPageDisplayableEndpointBuildItem> displayableEndpoints,
             CurateOutcomeBuildItem curateOutcomeBuildItem,
             LaunchModeBuildItem launchMode,
             SwaggerUiConfig swaggerUiConfig,
-            SmallRyeOpenApiConfig openapi) throws Exception {
+            SmallRyeOpenApiConfig openapi,
+            HttpRootPathBuildItem httpRootPathBuildItem,
+            LiveReloadBuildItem liveReloadBuildItem) throws Exception {
 
         if (shouldInclude(launchMode, swaggerUiConfig)) {
             if ("/".equals(swaggerUiConfig.path)) {
@@ -65,20 +93,30 @@ public class SwaggerUiProcessor {
                         "quarkus.swagger-ui.path was set to \"/\", this is not allowed as it blocks the application from serving anything else.");
             }
 
-            String openApiPath = httpRootPathBuildItem.adjustPath(openapi.path);
+            String openApiPath = httpRootPathBuildItem.resolvePath(nonApplicationRootPathBuildItem.resolvePath(openapi.path));
+            String swaggerUiPath = httpRootPathBuildItem
+                    .resolvePath(nonApplicationRootPathBuildItem.resolvePath(swaggerUiConfig.path));
+
             AppArtifact artifact = WebJarUtil.getAppArtifact(curateOutcomeBuildItem, SWAGGER_UI_WEBJAR_GROUP_ID,
                     SWAGGER_UI_WEBJAR_ARTIFACT_ID);
 
             if (launchMode.getLaunchMode().isDevOrTest()) {
-                Path tempPath = WebJarUtil.devOrTest(curateOutcomeBuildItem, launchMode, artifact, SWAGGER_UI_WEBJAR_PREFIX);
+                Path tempPath = WebJarUtil.copyResourcesForDevOrTest(curateOutcomeBuildItem, launchMode, artifact,
+                        SWAGGER_UI_WEBJAR_PREFIX);
                 // Update index.html
-                WebJarUtil.updateFile(tempPath.resolve("index.html"), generateIndexHtml(openApiPath, swaggerUiConfig));
+                WebJarUtil.updateFile(tempPath.resolve("index.html"),
+                        generateIndexHtml(openApiPath, swaggerUiPath, swaggerUiConfig));
 
-                swaggerUiBuildProducer.produce(new SwaggerUiBuildItem(tempPath.toAbsolutePath().toString(),
-                        httpRootPathBuildItem.adjustPath(swaggerUiConfig.path)));
-                displayableEndpoints.produce(new NotFoundPageDisplayableEndpointBuildItem(swaggerUiConfig.path + "/"));
+                swaggerUiBuildProducer.produce(new SwaggerUiBuildItem(tempPath.toAbsolutePath().toString(), swaggerUiPath));
+
+                // Handle live reload of branding files
+                if (liveReloadBuildItem.isLiveReload() && !liveReloadBuildItem.getChangedResources().isEmpty()) {
+                    WebJarUtil.hotReloadBrandingChanges(curateOutcomeBuildItem, launchMode, artifact,
+                            liveReloadBuildItem.getChangedResources());
+                }
             } else {
-                Map<String, byte[]> files = WebJarUtil.production(curateOutcomeBuildItem, artifact, SWAGGER_UI_WEBJAR_PREFIX);
+                Map<String, byte[]> files = WebJarUtil.copyResourcesForProduction(curateOutcomeBuildItem, artifact,
+                        SWAGGER_UI_WEBJAR_PREFIX);
                 ThemeHref theme = swaggerUiConfig.theme.orElse(ThemeHref.feeling_blue);
                 for (Map.Entry<String, byte[]> file : files.entrySet()) {
                     String fileName = file.getKey();
@@ -86,7 +124,7 @@ public class SwaggerUiProcessor {
                     if (fileName.equals(theme.toString()) || !fileName.startsWith("theme-")) {
                         byte[] content;
                         if (fileName.endsWith("index.html")) {
-                            content = generateIndexHtml(openApiPath, swaggerUiConfig);
+                            content = generateIndexHtml(openApiPath, swaggerUiPath, swaggerUiConfig);
                         } else {
                             content = file.getValue();
                         }
@@ -95,8 +133,7 @@ public class SwaggerUiProcessor {
                         nativeImageResourceBuildItemBuildProducer.produce(new NativeImageResourceBuildItem(fileName));
                     }
                 }
-                swaggerUiBuildProducer.produce(new SwaggerUiBuildItem(SWAGGER_UI_FINAL_DESTINATION,
-                        httpRootPathBuildItem.adjustPath(swaggerUiConfig.path)));
+                swaggerUiBuildProducer.produce(new SwaggerUiBuildItem(SWAGGER_UI_FINAL_DESTINATION, swaggerUiPath));
             }
         }
     }
@@ -105,6 +142,7 @@ public class SwaggerUiProcessor {
     @Record(ExecutionTime.RUNTIME_INIT)
     public void registerSwaggerUiHandler(SwaggerUiRecorder recorder,
             BuildProducer<RouteBuildItem> routes,
+            NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem,
             SwaggerUiBuildItem finalDestinationBuildItem,
             SwaggerUiRuntimeConfig runtimeConfig,
             LaunchModeBuildItem launchMode,
@@ -115,16 +153,26 @@ public class SwaggerUiProcessor {
                     finalDestinationBuildItem.getSwaggerUiPath(),
                     runtimeConfig);
 
-            routes.produce(new RouteBuildItem(swaggerUiConfig.path, handler));
-            routes.produce(new RouteBuildItem(swaggerUiConfig.path + "/*", handler));
+            routes.produce(nonApplicationRootPathBuildItem.routeBuilder()
+                    .route(swaggerUiConfig.path)
+                    .displayOnNotFoundPage("Open API UI")
+                    .handler(handler)
+                    .requiresLegacyRedirect()
+                    .build());
+            routes.produce(nonApplicationRootPathBuildItem.routeBuilder()
+                    .route(swaggerUiConfig.path + "/*")
+                    .handler(handler)
+                    .requiresLegacyRedirect()
+                    .build());
         }
     }
 
-    private byte[] generateIndexHtml(String openApiPath, SwaggerUiConfig swaggerUiConfig) throws IOException {
+    private byte[] generateIndexHtml(String openApiPath, String swaggerUiPath, SwaggerUiConfig swaggerUiConfig)
+            throws IOException {
         Map<Option, String> options = new HashMap<>();
         Map<String, String> urlsMap = null;
 
-        options.put(Option.selfHref, swaggerUiConfig.path);
+        options.put(Option.selfHref, swaggerUiPath);
 
         // Only add the url if the user did not specified urls
         if (swaggerUiConfig.urls != null && !swaggerUiConfig.urls.isEmpty()) {
@@ -267,7 +315,66 @@ public class SwaggerUiProcessor {
             options.put(Option.presets, presets);
         }
 
-        return IndexCreator.createIndexHtml(urlsMap, swaggerUiConfig.urlsPrimaryName.orElse(null), options);
+        if (swaggerUiConfig.oauthClientId.isPresent()) {
+            String oauthClientId = swaggerUiConfig.oauthClientId.get();
+            options.put(Option.oauthClientId, oauthClientId);
+        }
+        if (swaggerUiConfig.oauthClientSecret.isPresent()) {
+            String oauthClientSecret = swaggerUiConfig.oauthClientSecret.get();
+            options.put(Option.oauthClientSecret, oauthClientSecret);
+        }
+        if (swaggerUiConfig.oauthRealm.isPresent()) {
+            String oauthRealm = swaggerUiConfig.oauthRealm.get();
+            options.put(Option.oauthRealm, oauthRealm);
+        }
+        if (swaggerUiConfig.oauthAppName.isPresent()) {
+            String oauthAppName = swaggerUiConfig.oauthAppName.get();
+            options.put(Option.oauthAppName, oauthAppName);
+        }
+        if (swaggerUiConfig.oauthScopeSeparator.isPresent()) {
+            String oauthScopeSeparator = swaggerUiConfig.oauthScopeSeparator.get();
+            options.put(Option.oauthScopeSeparator, oauthScopeSeparator);
+        }
+        if (swaggerUiConfig.oauthScopes.isPresent()) {
+            String oauthScopes = swaggerUiConfig.oauthScopes.get();
+            options.put(Option.oauthScopes, oauthScopes);
+        }
+        if (swaggerUiConfig.oauthAdditionalQueryStringParams.isPresent()) {
+            String oauthAdditionalQueryStringParams = swaggerUiConfig.oauthAdditionalQueryStringParams.get();
+            options.put(Option.oauthAdditionalQueryStringParams, oauthAdditionalQueryStringParams);
+        }
+        if (swaggerUiConfig.oauthUseBasicAuthenticationWithAccessCodeGrant.isPresent()) {
+            String oauthUseBasicAuthenticationWithAccessCodeGrant = swaggerUiConfig.oauthUseBasicAuthenticationWithAccessCodeGrant
+                    .get().toString();
+            options.put(Option.oauthUseBasicAuthenticationWithAccessCodeGrant, oauthUseBasicAuthenticationWithAccessCodeGrant);
+        }
+        if (swaggerUiConfig.oauthUsePkceWithAuthorizationCodeGrant.isPresent()) {
+            String oauthUsePkceWithAuthorizationCodeGrant = swaggerUiConfig.oauthUsePkceWithAuthorizationCodeGrant.get()
+                    .toString();
+            options.put(Option.oauthUsePkceWithAuthorizationCodeGrant, oauthUsePkceWithAuthorizationCodeGrant);
+        }
+        if (swaggerUiConfig.preauthorizeBasicAuthDefinitionKey.isPresent()) {
+            String preauthorizeBasicAuthDefinitionKey = swaggerUiConfig.preauthorizeBasicAuthDefinitionKey.get();
+            options.put(Option.preauthorizeBasicAuthDefinitionKey, preauthorizeBasicAuthDefinitionKey);
+        }
+        if (swaggerUiConfig.preauthorizeBasicUsername.isPresent()) {
+            String preauthorizeBasicUsername = swaggerUiConfig.preauthorizeBasicUsername.get();
+            options.put(Option.preauthorizeBasicUsername, preauthorizeBasicUsername);
+        }
+        if (swaggerUiConfig.preauthorizeBasicPassword.isPresent()) {
+            String preauthorizeBasicPassword = swaggerUiConfig.preauthorizeBasicPassword.get();
+            options.put(Option.preauthorizeBasicPassword, preauthorizeBasicPassword);
+        }
+        if (swaggerUiConfig.preauthorizeApiKeyAuthDefinitionKey.isPresent()) {
+            String preauthorizeApiKeyAuthDefinitionKey = swaggerUiConfig.preauthorizeApiKeyAuthDefinitionKey.get();
+            options.put(Option.preauthorizeApiKeyAuthDefinitionKey, preauthorizeApiKeyAuthDefinitionKey);
+        }
+        if (swaggerUiConfig.preauthorizeApiKeyApiKeyValue.isPresent()) {
+            String preauthorizeApiKeyApiKeyValue = swaggerUiConfig.preauthorizeApiKeyApiKeyValue.get();
+            options.put(Option.preauthorizeApiKeyApiKeyValue, preauthorizeApiKeyApiKeyValue);
+        }
+
+        return IndexHtmlCreator.createIndexHtml(urlsMap, swaggerUiConfig.urlsPrimaryName.orElse(null), options);
     }
 
     private static boolean shouldInclude(LaunchModeBuildItem launchMode, SwaggerUiConfig swaggerUiConfig) {

@@ -1,5 +1,6 @@
 package io.quarkus.devtools.codestarts.quarkus;
 
+import io.quarkus.devtools.codestarts.DataKey;
 import io.quarkus.devtools.codestarts.utils.NestedMaps;
 import java.util.HashMap;
 import java.util.Map;
@@ -13,7 +14,7 @@ public final class QuarkusCodestartData {
     private QuarkusCodestartData() {
     }
 
-    public enum DataKey {
+    public enum QuarkusDataKey implements DataKey {
         BOM_GROUP_ID("quarkus.platform.group-id"),
         BOM_ARTIFACT_ID("quarkus.platform.artifact-id"),
         BOM_VERSION("quarkus.platform.version"),
@@ -27,10 +28,19 @@ public final class QuarkusCodestartData {
         QUARKUS_GRADLE_PLUGIN_ID("quarkus.gradle-plugin.id"),
         QUARKUS_GRADLE_PLUGIN_VERSION("quarkus.gradle-plugin.version"),
         QUARKUS_VERSION("quarkus.version"),
+
         JAVA_VERSION("java.version"),
+        KOTLIN_VERSION("kotlin.version"),
+        SCALA_VERSION("scala.version"),
+        SCALA_MAVEN_PLUGIN_VERSION("scala-maven-plugin.version"),
+        MAVEN_COMPILER_PLUGIN_VERSION("maven-compiler-plugin.version"),
+        MAVEN_SUREFIRE_PLUGIN_VERSION("maven-surefire-plugin.version"),
 
         RESTEASY_EXAMPLE_RESOURCE_PATH("resteasy-example.resource.path"),
         RESTEASY_EXAMPLE_RESOURCE_CLASS_NAME("resteasy-example.resource.class-name"),
+
+        RESTEASY_REACTIVE_EXAMPLE_RESOURCE_PATH("resteasy-reactive-example.resource.path"),
+        RESTEASY_REACTIVE_EXAMPLE_RESOURCE_CLASS_NAME("resteasy-reactive-example.resource.class-name"),
 
         SPRING_WEB_EXAMPLE_RESOURCE_PATH("spring-web-example.resource.path"),
         SPRING_WEB_EXAMPLE_RESOURCE_CLASS_NAME("spring-web-example.resource.class-name"),
@@ -43,16 +53,17 @@ public final class QuarkusCodestartData {
 
         private final String key;
 
-        DataKey(String key) {
+        QuarkusDataKey(String key) {
             this.key = key;
         }
 
-        public String getKey() {
+        @Override
+        public String key() {
             return key;
         }
     }
 
-    public enum LegacySupport {
+    public enum LegacySupport implements DataKey {
         BOM_GROUP_ID("bom_groupId"),
         BOM_ARTIFACT_ID("bom_artifactId"),
         BOM_VERSION("bom_version"),
@@ -66,10 +77,19 @@ public final class QuarkusCodestartData {
         QUARKUS_GRADLE_PLUGIN_ID("gradle_plugin_id"),
         QUARKUS_GRADLE_PLUGIN_VERSION("gradle_plugin_version"),
         QUARKUS_VERSION("quarkus_version"),
+
         JAVA_VERSION("java_target"),
+        KOTLIN_VERSION("kotlin_version"),
+        SCALA_VERSION("scala_version"),
+        SCALA_MAVEN_PLUGIN_VERSION("scala_plugin_version"),
+        MAVEN_COMPILER_PLUGIN_VERSION("compiler_plugin_version"),
+        MAVEN_SUREFIRE_PLUGIN_VERSION("surefire_plugin_version"),
 
         RESTEASY_EXAMPLE_RESOURCE_PATH("path"),
         RESTEASY_EXAMPLE_RESOURCE_CLASS_NAME(QuarkusCodestartData::convertClassName),
+
+        RESTEASY_REACTIVE_EXAMPLE_RESOURCE_PATH("path"),
+        RESTEASY_REACTIVE_EXAMPLE_RESOURCE_CLASS_NAME(QuarkusCodestartData::convertClassName),
 
         SPRING_WEB_EXAMPLE_RESOURCE_PATH("path"),
         SPRING_WEB_EXAMPLE_RESOURCE_CLASS_NAME(QuarkusCodestartData::convertClassName);
@@ -82,17 +102,18 @@ public final class QuarkusCodestartData {
         }
 
         LegacySupport(Function<Map<String, Object>, Object> converter) {
-            this.key = DataKey.valueOf(this.name()).getKey();
+            this.key = QuarkusDataKey.valueOf(this.name()).key();
             this.converter = converter;
         }
 
-        public String getKey() {
+        @Override
+        public String key() {
             return key;
         }
 
         public static Map<String, Object> convertFromLegacy(Map<String, Object> legacy) {
             return NestedMaps.unflatten(Stream.of(values())
-                    .map(v -> new HashMap.SimpleImmutableEntry<>(v.getKey(), v.converter.apply(legacy)))
+                    .map(v -> new HashMap.SimpleImmutableEntry<>(v.key(), v.converter.apply(legacy)))
                     .filter(v -> v.getValue() != null)
                     .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
         }

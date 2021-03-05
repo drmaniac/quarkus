@@ -39,6 +39,11 @@ class MongodbPanacheResourceTest {
     };
 
     @Test
+    public void testAccessors() {
+        callEndpoint("/accessors");
+    }
+
+    @Test
     public void testBookEntity() {
         callBookEndpoint("/books/entity");
     }
@@ -195,6 +200,21 @@ class MongodbPanacheResourceTest {
         Assertions.assertEquals(204, response.statusCode());
     }
 
+    private void callEndpoint(String endpoint) {
+        RestAssured.defaultParser = Parser.JSON;
+        RestAssured.config
+                .objectMapperConfig(new ObjectMapperConfig().jackson2ObjectMapperFactory((type, s) -> new ObjectMapper()
+                        .registerModule(new Jdk8Module())
+                        .registerModule(new JavaTimeModule())
+                        .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)));
+
+        Response response = RestAssured
+                .given()
+                .get(endpoint)
+                .andReturn();
+        Assertions.assertEquals(200, response.statusCode());
+    }
+
     private void callPersonEndpoint(String endpoint) {
         RestAssured.defaultParser = Parser.JSON;
         RestAssured.config
@@ -314,7 +334,7 @@ class MongodbPanacheResourceTest {
 
         // Test prometheus metrics gathered using micrometer metrics
         RestAssured.given()
-                .when().get("/metrics")
+                .when().get("/q/metrics")
                 .then()
                 .statusCode(200)
                 .body(CoreMatchers.containsString("mongodb_driver_pool_checkedout"))

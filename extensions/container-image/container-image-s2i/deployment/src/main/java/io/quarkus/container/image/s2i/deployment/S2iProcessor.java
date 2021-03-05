@@ -42,12 +42,13 @@ import io.fabric8.kubernetes.client.KubernetesClientException;
 import io.quarkus.bootstrap.model.AppDependency;
 import io.quarkus.container.image.deployment.ContainerImageConfig;
 import io.quarkus.container.image.deployment.util.ImageUtil;
+import io.quarkus.container.spi.AvailableContainerImageExtensionBuildItem;
 import io.quarkus.container.spi.BaseImageInfoBuildItem;
 import io.quarkus.container.spi.ContainerImageBuildRequestBuildItem;
 import io.quarkus.container.spi.ContainerImageInfoBuildItem;
 import io.quarkus.container.spi.ContainerImagePushRequestBuildItem;
 import io.quarkus.deployment.Capability;
-import io.quarkus.deployment.IsNormal;
+import io.quarkus.deployment.IsNormalNotRemoteDev;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.builditem.ArchiveRootBuildItem;
@@ -74,12 +75,17 @@ public class S2iProcessor {
 
     private static final Logger LOG = Logger.getLogger(S2iProcessor.class);
 
+    @BuildStep
+    public AvailableContainerImageExtensionBuildItem availability() {
+        return new AvailableContainerImageExtensionBuildItem(S2I);
+    }
+
     @BuildStep(onlyIf = S2iBuild.class)
     public CapabilityBuildItem capability() {
         return new CapabilityBuildItem(Capability.CONTAINER_IMAGE_S2I);
     }
 
-    @BuildStep(onlyIf = { IsNormal.class, S2iBuild.class }, onlyIfNot = NativeBuild.class)
+    @BuildStep(onlyIf = { IsNormalNotRemoteDev.class, S2iBuild.class }, onlyIfNot = NativeBuild.class)
     public void s2iRequirementsJvm(S2iConfig s2iConfig,
             CurateOutcomeBuildItem curateOutcomeBuildItem,
             OutputTargetBuildItem out,
@@ -121,7 +127,7 @@ public class S2iProcessor {
         }
     }
 
-    @BuildStep(onlyIf = { IsNormal.class, S2iBuild.class, NativeBuild.class })
+    @BuildStep(onlyIf = { IsNormalNotRemoteDev.class, S2iBuild.class, NativeBuild.class })
     public void s2iRequirementsNative(S2iConfig s2iConfig,
             CurateOutcomeBuildItem curateOutcomeBuildItem,
             OutputTargetBuildItem out,
@@ -163,7 +169,7 @@ public class S2iProcessor {
         }
     }
 
-    @BuildStep(onlyIf = { IsNormal.class, S2iBuild.class }, onlyIfNot = NativeBuild.class)
+    @BuildStep(onlyIf = { IsNormalNotRemoteDev.class, S2iBuild.class }, onlyIfNot = NativeBuild.class)
     public void s2iBuildFromJar(S2iConfig s2iConfig, ContainerImageConfig containerImageConfig,
             KubernetesClientBuildItem kubernetesClient,
             ContainerImageInfoBuildItem containerImage,
@@ -200,7 +206,7 @@ public class S2iProcessor {
         artifactResultProducer.produce(new ArtifactResultBuildItem(null, "jar-container", Collections.emptyMap()));
     }
 
-    @BuildStep(onlyIf = { IsNormal.class, S2iBuild.class, NativeBuild.class })
+    @BuildStep(onlyIf = { IsNormalNotRemoteDev.class, S2iBuild.class, NativeBuild.class })
     public void s2iBuildFromNative(S2iConfig s2iConfig, ContainerImageConfig containerImageConfig,
             KubernetesClientBuildItem kubernetesClient,
             ContainerImageInfoBuildItem containerImage,

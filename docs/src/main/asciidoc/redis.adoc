@@ -505,7 +505,7 @@ Then run it:
 
 [source,bash]
 ----
-java -jar ./target/redis-quickstart-1.0-SNAPSHOT-runner.jar
+java -jar target/quarkus-app/quarkus-run.jar
 ----
 
 == Running Native
@@ -528,7 +528,7 @@ Once the build is finished, you can run the executable with:
 
 [source,bash]
 ----
-./target/redis-quickstart-1.0-SNAPSHOT-runner
+./target/redis-quickstart-1.0.0-SNAPSHOT-runner
 ----
 
 == Connection Health Check
@@ -536,7 +536,7 @@ Once the build is finished, you can run the executable with:
 If you are using the `quarkus-smallrye-health` extension, `quarkus-vertx-redis` will automatically add a readiness health check
 to validate the connection to the Redis server.
 
-So when you access the `/health/ready` endpoint of your application you will have information about the connection validation status.
+So when you access the `/q/health/ready` endpoint of your application you will have information about the connection validation status.
 
 This behavior can be disabled by setting the `quarkus.redis.health.enabled` property to `false` in your `application.properties`.
 

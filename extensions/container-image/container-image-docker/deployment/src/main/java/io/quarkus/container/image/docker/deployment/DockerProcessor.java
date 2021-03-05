@@ -24,15 +24,17 @@ import org.jboss.logging.Logger;
 
 import io.quarkus.container.image.deployment.ContainerImageConfig;
 import io.quarkus.container.image.deployment.util.NativeBinaryUtil;
+import io.quarkus.container.spi.AvailableContainerImageExtensionBuildItem;
 import io.quarkus.container.spi.ContainerImageBuildRequestBuildItem;
 import io.quarkus.container.spi.ContainerImageInfoBuildItem;
 import io.quarkus.container.spi.ContainerImagePushRequestBuildItem;
 import io.quarkus.deployment.Capability;
-import io.quarkus.deployment.IsNormal;
+import io.quarkus.deployment.IsNormalNotRemoteDev;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.builditem.CapabilityBuildItem;
 import io.quarkus.deployment.pkg.PackageConfig;
+import io.quarkus.deployment.pkg.builditem.AppCDSResultBuildItem;
 import io.quarkus.deployment.pkg.builditem.ArtifactResultBuildItem;
 import io.quarkus.deployment.pkg.builditem.JarBuildItem;
 import io.quarkus.deployment.pkg.builditem.NativeImageBuildItem;
@@ -43,30 +45,36 @@ import io.quarkus.deployment.util.ExecUtil;
 public class DockerProcessor {
 
     private static final Logger log = Logger.getLogger(DockerProcessor.class);
+    private static final String DOCKER = "docker";
     private static final String DOCKERFILE_JVM = "Dockerfile.jvm";
-    private static final String DOCKERFILE_FAST_JAR = "Dockerfile.fast-jar";
+    private static final String DOCKERFILE_LEGACY_JAR = "Dockerfile.legacy-jar";
     private static final String DOCKERFILE_NATIVE = "Dockerfile.native";
     private static final String DOCKER_DIRECTORY_NAME = "docker";
-
     static final String DOCKER_CONTAINER_IMAGE_NAME = "docker";
 
     private final DockerWorking dockerWorking = new DockerWorking();
+
+    @BuildStep
+    public AvailableContainerImageExtensionBuildItem availability() {
+        return new AvailableContainerImageExtensionBuildItem(DOCKER);
+    }
 
     @BuildStep(onlyIf = DockerBuild.class)
     public CapabilityBuildItem capability() {
         return new CapabilityBuildItem(Capability.CONTAINER_IMAGE_DOCKER);
     }
 
-    @BuildStep(onlyIf = { IsNormal.class, DockerBuild.class }, onlyIfNot = NativeBuild.class)
+    @BuildStep(onlyIf = { IsNormalNotRemoteDev.class, DockerBuild.class }, onlyIfNot = NativeBuild.class)
     public void dockerBuildFromJar(DockerConfig dockerConfig,
             ContainerImageConfig containerImageConfig,
             OutputTargetBuildItem out,
             ContainerImageInfoBuildItem containerImageInfo,
             Optional<ContainerImageBuildRequestBuildItem> buildRequest,
             Optional<ContainerImagePushRequestBuildItem> pushRequest,
+            @SuppressWarnings("unused") Optional<AppCDSResultBuildItem> appCDSResult, // ensure docker build will be performed after AppCDS creation
             BuildProducer<ArtifactResultBuildItem> artifactResultProducer,
             PackageConfig packageConfig,
-            // used to ensure that the jar has been built
+            @SuppressWarnings("unused") // used to ensure that the jar has been built
             JarBuildItem jar) {
 
         if (!containerImageConfig.build && !containerImageConfig.push && !buildRequest.isPresent()
@@ -81,13 +89,15 @@ public class DockerProcessor {
         log.info("Building docker image for jar.");
 
         ImageIdReader reader = new ImageIdReader();
-        createContainerImage(containerImageConfig, dockerConfig, containerImageInfo, out, reader, false,
+        String builtContainerImage = createContainerImage(containerImageConfig, dockerConfig, containerImageInfo, out, reader,
+                false,
                 pushRequest.isPresent(), packageConfig);
 
-        artifactResultProducer.produce(new ArtifactResultBuildItem(null, "jar-container", Collections.emptyMap()));
+        artifactResultProducer.produce(new ArtifactResultBuildItem(null, "jar-container",
+                Collections.singletonMap("container-image", builtContainerImage)));
     }
 
-    @BuildStep(onlyIf = { IsNormal.class, NativeBuild.class, DockerBuild.class })
+    @BuildStep(onlyIf = { IsNormalNotRemoteDev.class, NativeBuild.class, DockerBuild.class })
     public void dockerBuildFromNativeImage(DockerConfig dockerConfig,
             ContainerImageConfig containerImageConfig,
             ContainerImageInfoBuildItem containerImage,
@@ -116,12 +126,13 @@ public class DockerProcessor {
         log.info("Starting docker image build");
 
         ImageIdReader reader = new ImageIdReader();
-        createContainerImage(containerImageConfig, dockerConfig, containerImage, out, reader, true,
+        String builtContainerImage = createContainerImage(containerImageConfig, dockerConfig, containerImage, out, reader, true,
                 pushRequest.isPresent(), packageConfig);
-        artifactResultProducer.produce(new ArtifactResultBuildItem(null, "native-container", Collections.emptyMap()));
+        artifactResultProducer.produce(new ArtifactResultBuildItem(null, "native-container",
+                Collections.singletonMap("container-image", builtContainerImage)));
     }
 
-    private void createContainerImage(ContainerImageConfig containerImageConfig, DockerConfig dockerConfig,
+    private String createContainerImage(ContainerImageConfig containerImageConfig, DockerConfig dockerConfig,
             ContainerImageInfoBuildItem containerImageInfo,
             OutputTargetBuildItem out, ImageIdReader reader, boolean forNative, boolean pushRequested,
             PackageConfig packageConfig) {
@@ -165,6 +176,8 @@ public class DockerProcessor {
                 pushImage(imageToPush, dockerConfig);
             }
         }
+
+        return containerImageInfo.getImage();
     }
 
     private String[] getDockerArgs(String image, DockerfilePaths dockerfilePaths, DockerConfig dockerConfig) {
@@ -222,9 +235,8 @@ public class DockerProcessor {
         } else {
             if (dockerConfig.dockerfileJvmPath.isPresent()) {
                 return ProvidedDockerfile.get(Paths.get(dockerConfig.dockerfileJvmPath.get()), outputDirectory);
-            } else if (packageConfig.type.equals(PackageConfig.FAST_JAR)
-                    || packageConfig.type.equalsIgnoreCase(PackageConfig.MUTABLE_JAR)) {
-                return DockerfileDetectionResult.detect(DOCKERFILE_FAST_JAR, outputDirectory);
+            } else if (packageConfig.type.equals(PackageConfig.LEGACY_JAR)) {
+                return DockerfileDetectionResult.detect(DOCKERFILE_LEGACY_JAR, outputDirectory);
             } else {
                 return DockerfileDetectionResult.detect(DOCKERFILE_JVM, outputDirectory);
             }
@@ -334,7 +346,7 @@ public class DockerProcessor {
             }
             Path effectiveDockerfilePath = dockerfilePath.isAbsolute() ? dockerfilePath
                     : mainSourcesRoot.getValue().resolve(dockerfilePath);
-            if (!dockerfilePath.toFile().exists()) {
+            if (!effectiveDockerfilePath.toFile().exists()) {
                 throw new IllegalArgumentException(
                         "Specified Dockerfile path " + effectiveDockerfilePath.toAbsolutePath().toString() + " does not exist");
             }

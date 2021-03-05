@@ -91,6 +91,8 @@ public class ResteasyCommonProcessor {
     private static final DotName QUARKUS_JSONB_SERIALIZER = DotName
             .createSimple("io.quarkus.resteasy.common.runtime.jsonb.QuarkusJsonbSerializer");
 
+    private static final String[] WILDCARD_MEDIA_TYPE_ARRAY = { MediaType.WILDCARD };
+
     private ResteasyCommonConfig resteasyCommonConfig;
 
     @ConfigRoot(name = "resteasy")
@@ -162,14 +164,15 @@ public class ResteasyCommonProcessor {
             contributedProviders.add(contributedProviderBuildItem.getName());
         }
 
+        Set<String> annotatedProviders = new HashSet<>();
         for (AnnotationInstance i : indexBuildItem.getIndex().getAnnotations(ResteasyDotNames.PROVIDER)) {
             if (i.target().kind() == AnnotationTarget.Kind.CLASS) {
-                contributedProviders.add(i.target().asClass().name().toString());
+                annotatedProviders.add(i.target().asClass().name().toString());
             }
             checkProperConfigAccessInProvider(i);
             checkProperConstructorInProvider(i);
         }
-
+        contributedProviders.addAll(annotatedProviders);
         Set<String> availableProviders = new HashSet<>(ServiceUtil.classNamesNamedIn(getClass().getClassLoader(),
                 "META-INF/services/" + Providers.class.getName()));
         // this one is added manually in RESTEasy's ResteasyDeploymentImpl
@@ -190,7 +193,8 @@ public class ResteasyCommonProcessor {
 
             boolean needJsonSupport = restJsonSupportNeeded(indexBuildItem, ResteasyDotNames.CONSUMES)
                     || restJsonSupportNeeded(indexBuildItem, ResteasyDotNames.PRODUCES)
-                    || restJsonSupportNeeded(indexBuildItem, ResteasyDotNames.RESTEASY_SSE_ELEMENT_TYPE);
+                    || restJsonSupportNeeded(indexBuildItem, ResteasyDotNames.RESTEASY_SSE_ELEMENT_TYPE)
+                    || restJsonSupportNeeded(indexBuildItem, ResteasyDotNames.RESTEASY_PART_TYPE);
             if (needJsonSupport) {
                 LOGGER.warn(
                         "Quarkus detected the need of REST JSON support but you have not provided the necessary JSON " +
@@ -235,7 +239,8 @@ public class ResteasyCommonProcessor {
                     "org.jboss.resteasy.plugins.providers.jsonb.AbstractJsonBindingProvider"));
         }
 
-        return new JaxrsProvidersToRegisterBuildItem(providersToRegister, contributedProviders, useBuiltinProviders);
+        return new JaxrsProvidersToRegisterBuildItem(
+                providersToRegister, contributedProviders, annotatedProviders, useBuiltinProviders);
     }
 
     private String mutinySupportNeeded(CombinedIndexBuildItem indexBuildItem) {
@@ -483,6 +488,18 @@ public class ResteasyCommonProcessor {
                     }
                 }
             }
+
+            // handle @PartType: we don't know if it's used for writing or reading so we register both
+            for (AnnotationInstance partTypeAnnotation : index.getAnnotations(ResteasyDotNames.RESTEASY_PART_TYPE)) {
+                try {
+                    MediaType partTypeMediaType = MediaType.valueOf(partTypeAnnotation.value().asString());
+                    providersToRegister.addAll(categorizedReaders.getPossible(partTypeMediaType));
+                    providersToRegister.addAll(categorizedWriters.getPossible(partTypeMediaType));
+                } catch (IllegalArgumentException e) {
+                    // Let's not throw an error, there's a good chance RESTEasy will do it for us
+                    // and if not, this might be valid.
+                }
+            }
         }
         return false;
     }
@@ -514,8 +531,12 @@ public class ResteasyCommonProcessor {
                 return true;
             }
         }
+        String[] mediaTypes = WILDCARD_MEDIA_TYPE_ARRAY;
+        if (mediaTypeMethodAnnotationInstance.value() != null) {
+            mediaTypes = mediaTypeMethodAnnotationInstance.value().asStringArray();
+        }
         if (collectDeclaredProvidersForMediaTypeAnnotationInstance(providersToRegister, categorizedProviders,
-                mediaTypeMethodAnnotationInstance.value().asStringArray(), methodTarget)) {
+                mediaTypes, methodTarget)) {
             return true;
         }
 

@@ -6,6 +6,8 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
+import java.util.stream.Stream;
 
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.plugin.MojoExecutionException;
@@ -15,6 +17,7 @@ import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.MavenProjectHelper;
 import org.eclipse.aether.repository.RemoteRepository;
 
@@ -22,6 +25,7 @@ import io.quarkus.bootstrap.app.AugmentAction;
 import io.quarkus.bootstrap.app.AugmentResult;
 import io.quarkus.bootstrap.app.CuratedApplication;
 import io.quarkus.bootstrap.util.IoUtils;
+import io.quarkus.runtime.configuration.ProfileManager;
 
 /**
  * Builds the Quarkus application.
@@ -29,7 +33,9 @@ import io.quarkus.bootstrap.util.IoUtils;
 @Mojo(name = "build", defaultPhase = LifecyclePhase.PACKAGE, requiresDependencyResolution = ResolutionScope.COMPILE_PLUS_RUNTIME, threadSafe = true)
 public class BuildMojo extends QuarkusBootstrapMojo {
 
-    public static final String QUARKUS_PACKAGE_UBER_JAR = "quarkus.package.uber-jar";
+    private static final String PACKAGE_TYPE_PROP = "quarkus.package.type";
+    private static final String NATIVE_PROFILE_NAME = "native";
+    private static final String NATIVE_PACKAGE_TYPE = "native";
 
     @Component
     private MavenProjectHelper projectHelper;
@@ -78,6 +84,28 @@ public class BuildMojo extends QuarkusBootstrapMojo {
     protected void doExecute() throws MojoExecutionException {
 
         try {
+            boolean clearPackageTypeSysProp = false;
+            // Essentially what this does is to enable the native package type even if a different package type is set
+            // in application properties. This is done to preserve what users expect to happen when
+            // they execute "mvn package -Dnative" even if quarkus.package.type has been set in application.properties
+            if (!System.getProperties().containsKey(PACKAGE_TYPE_PROP)
+                    && isNativeProfileEnabled(mavenProject())) {
+                Object packageTypeProp = mavenProject().getProperties().get(PACKAGE_TYPE_PROP);
+                String packageType = NATIVE_PACKAGE_TYPE;
+                if (packageTypeProp != null) {
+                    packageType = packageTypeProp.toString();
+                }
+                System.setProperty(PACKAGE_TYPE_PROP, packageType);
+                clearPackageTypeSysProp = true;
+            }
+            // Set the build profile based on the value of the project property ProfileManager.QUARKUS_PROFILE_PROP
+            // if and only if it has not already been set using the corresponding system property
+            // or environment variable.
+            final Object profile = mavenProject().getProperties().get(ProfileManager.QUARKUS_PROFILE_PROP);
+            if (profile != null && System.getProperty(ProfileManager.QUARKUS_PROFILE_PROP) == null
+                    && System.getenv(ProfileManager.QUARKUS_PROFILE_ENV) == null) {
+                System.setProperty(ProfileManager.QUARKUS_PROFILE_PROP, profile.toString());
+            }
             try (CuratedApplication curatedApplication = bootstrapApplication()) {
 
                 AugmentAction action = curatedApplication.createAugmentor();
@@ -106,10 +134,25 @@ public class BuildMojo extends QuarkusBootstrapMojo {
                                 result.getJar().getClassifier());
                     }
                 }
+            } finally {
+                if (clearPackageTypeSysProp) {
+                    System.clearProperty(PACKAGE_TYPE_PROP);
+                }
             }
         } catch (Exception e) {
             throw new MojoExecutionException("Failed to build quarkus application", e);
         }
+    }
+
+    private boolean isNativeProfileEnabled(MavenProject mavenProject) {
+        // gotcha: mavenProject.getActiveProfiles() does not always contain all active profiles (sic!),
+        //         but getInjectedProfileIds() does (which has to be "flattened" first)
+        Stream<String> activeProfileIds = mavenProject.getInjectedProfileIds().values().stream().flatMap(List<String>::stream);
+        if (activeProfileIds.anyMatch(NATIVE_PROFILE_NAME::equalsIgnoreCase)) {
+            return true;
+        }
+        // recurse into parent (if available)
+        return Optional.ofNullable(mavenProject.getParent()).map(this::isNativeProfileEnabled).orElse(false);
     }
 
     @Override

@@ -14,6 +14,7 @@ import java.util.Map;
 
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
+import org.jboss.jandex.MethodInfo;
 import org.jboss.jandex.Type;
 import org.jboss.resteasy.reactive.common.model.InjectableBean;
 import org.jboss.resteasy.reactive.common.model.MethodParameter;
@@ -63,7 +64,7 @@ public class ClientEndpointIndexer
     }
 
     @Override
-    protected ResourceMethod createResourceMethod() {
+    protected ResourceMethod createResourceMethod(MethodInfo info, Map<String, Object> methodContext) {
         return new ResourceMethod();
     }
 
@@ -79,10 +80,10 @@ public class ClientEndpointIndexer
 
     protected MethodParameter createMethodParameter(ClassInfo currentClassInfo, ClassInfo actualEndpointInfo, boolean encoded,
             Type paramType, ClientIndexedParam parameterResult, String name, String defaultValue, ParameterType type,
-            String elementType, boolean single) {
+            String elementType, boolean single, String signature) {
         return new MethodParameter(name,
-                elementType, toClassName(paramType, currentClassInfo, actualEndpointInfo, index), type, single,
-                defaultValue, parameterResult.isObtainedAsCollection(), encoded);
+                elementType, toClassName(paramType, currentClassInfo, actualEndpointInfo, index), signature, type, single,
+                defaultValue, parameterResult.isObtainedAsCollection(), parameterResult.isOptional(), encoded);
     }
 
     protected void addWriterForType(AdditionalWriters additionalWriters, Type paramType) {

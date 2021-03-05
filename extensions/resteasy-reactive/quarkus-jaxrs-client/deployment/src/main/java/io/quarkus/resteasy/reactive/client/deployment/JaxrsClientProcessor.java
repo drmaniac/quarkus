@@ -8,11 +8,14 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 
 import javax.ws.rs.RuntimeType;
+import javax.ws.rs.client.Entity;
 import javax.ws.rs.client.Invocation;
 import javax.ws.rs.client.WebTarget;
+import javax.ws.rs.core.MediaType;
 
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.DotName;
@@ -30,6 +33,7 @@ import org.jboss.resteasy.reactive.common.processor.AdditionalReaderWriter;
 import org.jboss.resteasy.reactive.common.processor.AdditionalReaders;
 import org.jboss.resteasy.reactive.common.processor.AdditionalWriters;
 import org.jboss.resteasy.reactive.common.processor.ResteasyReactiveDotNames;
+import org.jboss.resteasy.reactive.common.processor.scanning.ResourceScanningResult;
 
 import io.quarkus.arc.deployment.BeanArchiveIndexBuildItem;
 import io.quarkus.arc.deployment.BeanContainerBuildItem;
@@ -70,7 +74,7 @@ public class JaxrsClientProcessor {
             List<MessageBodyReaderBuildItem> messageBodyReaderBuildItems,
             List<MessageBodyWriterBuildItem> messageBodyWriterBuildItems,
             BeanArchiveIndexBuildItem beanArchiveIndexBuildItem,
-            ResourceScanningResultBuildItem resourceScanningResultBuildItem,
+            Optional<ResourceScanningResultBuildItem> resourceScanningResultBuildItem,
             ResteasyReactiveConfig config,
             RecorderContext recorderContext,
             BuildProducer<GeneratedClassBuildItem> generatedClassBuildItemBuildProducer,
@@ -82,10 +86,12 @@ public class JaxrsClientProcessor {
                 messageBodyWriterBuildItems, beanContainerBuildItem, applicationResultBuildItem, serialisers,
                 RuntimeType.CLIENT);
 
-        if (resourceScanningResultBuildItem == null || resourceScanningResultBuildItem.getPathInterfaces().isEmpty()) {
+        if (!resourceScanningResultBuildItem.isPresent()
+                || resourceScanningResultBuildItem.get().getResult().getPathInterfaces().isEmpty()) {
             recorder.setupClientProxies(new HashMap<>());
             return;
         }
+        ResourceScanningResult result = resourceScanningResultBuildItem.get().getResult();
 
         AdditionalReaders additionalReaders = new AdditionalReaders();
         AdditionalWriters additionalWriters = new AdditionalWriters();
@@ -94,19 +100,19 @@ public class JaxrsClientProcessor {
         ClientEndpointIndexer clientEndpointIndexer = new ClientEndpointIndexer.Builder()
                 .setIndex(index)
                 .setExistingConverters(new HashMap<>())
-                .setScannedResourcePaths(resourceScanningResultBuildItem.getScannedResourcePaths())
+                .setScannedResourcePaths(result.getScannedResourcePaths())
                 .setConfig(new org.jboss.resteasy.reactive.common.ResteasyReactiveConfig(config.inputBufferSize.asLongValue(),
-                        config.singleDefaultProduces))
+                        config.singleDefaultProduces, config.defaultProduces))
                 .setAdditionalReaders(additionalReaders)
-                .setHttpAnnotationToMethod(resourceScanningResultBuildItem.getHttpAnnotationToMethod())
+                .setHttpAnnotationToMethod(result.getHttpAnnotationToMethod())
                 .setInjectableBeans(new HashMap<>())
                 .setFactoryCreator(new QuarkusFactoryCreator(recorder, beanContainerBuildItem.getValue()))
                 .setAdditionalWriters(additionalWriters)
-                .setDefaultBlocking(applicationResultBuildItem.isBlocking())
+                .setDefaultBlocking(applicationResultBuildItem.getResult().isBlocking())
                 .setHasRuntimeConverters(false).build();
 
         List<RestClientInterface> clientDefinitions = new ArrayList<>();
-        for (Map.Entry<DotName, String> i : resourceScanningResultBuildItem.getPathInterfaces().entrySet()) {
+        for (Map.Entry<DotName, String> i : result.getPathInterfaces().entrySet()) {
             ClassInfo clazz = index.getClassByName(i.getKey());
             //these interfaces can also be clients
             //so we generate client proxies for them
@@ -208,6 +214,8 @@ public class JaxrsClientProcessor {
                                 String.class), tg, m.load(method.getPath()));
                     }
 
+                    Integer bodyParameterIdx = null;
+
                     for (int i = 0; i < method.getParameters().length; ++i) {
                         MethodParameter p = method.getParameters()[i];
                         if (p.parameterType == ParameterType.QUERY) {
@@ -218,6 +226,8 @@ public class JaxrsClientProcessor {
                                     MethodDescriptor.ofMethod(WebTarget.class, "queryParam", WebTarget.class,
                                             String.class, Object[].class),
                                     tg, m.load(p.name), array);
+                        } else if (p.parameterType == ParameterType.BODY) {
+                            bodyParameterIdx = i;
                         }
 
                     }
@@ -238,12 +248,37 @@ public class JaxrsClientProcessor {
                     }
                     //TODO: async return types
 
-                    ResultHandle result = m
-                            .invokeInterfaceMethod(
-                                    MethodDescriptor.ofMethod(Invocation.Builder.class, "method", Object.class, String.class,
-                                            Class.class),
-                                    builder, m.load(method.getHttpMethod()), m.loadClass(method.getSimpleReturnType()));
+                    ResultHandle result;
+                    if (bodyParameterIdx != null) {
+                        String mediaTypeValue = MediaType.APPLICATION_OCTET_STREAM;
+                        String[] consumes = method.getConsumes();
+                        if (consumes != null && consumes.length > 0) {
+                            if (consumes.length > 1) {
+                                throw new IllegalArgumentException(
+                                        "Multiple `@Consumes` values used in a MicroProfile Rest Client: " +
+                                                restClientInterface.getClassName()
+                                                + " Unable to determine a single `Content-Type`.");
+                            }
+                            mediaTypeValue = consumes[0];
+                        }
+                        ResultHandle mediaType = m.invokeStaticMethod(
+                                MethodDescriptor.ofMethod(MediaType.class, "valueOf", MediaType.class, String.class),
+                                m.load(mediaTypeValue));
 
+                        ResultHandle entity = m.invokeStaticMethod(
+                                MethodDescriptor.ofMethod(Entity.class, "entity", Entity.class, Object.class, MediaType.class),
+                                m.getMethodParam(bodyParameterIdx),
+                                mediaType);
+                        result = m.invokeInterfaceMethod(
+                                MethodDescriptor.ofMethod(Invocation.Builder.class, "method", Object.class, String.class,
+                                        Entity.class, Class.class),
+                                builder, m.load(method.getHttpMethod()), entity, m.loadClass(method.getSimpleReturnType()));
+                    } else {
+                        result = m.invokeInterfaceMethod(
+                                MethodDescriptor.ofMethod(Invocation.Builder.class, "method", Object.class, String.class,
+                                        Class.class),
+                                builder, m.load(method.getHttpMethod()), m.loadClass(method.getSimpleReturnType()));
+                    }
                     m.returnValue(result);
                 }
 

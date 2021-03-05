@@ -428,12 +428,16 @@ final class Beans {
     }
 
     static boolean matches(BeanInfo bean, TypeAndQualifiers typeAndQualifiers) {
-        // Bean has all the required qualifiers and  a bean type that matches the required type
-        return hasQualifiers(bean, typeAndQualifiers.qualifiers) && matchesType(bean, typeAndQualifiers.type);
+        return matches(bean, typeAndQualifiers.type, typeAndQualifiers.qualifiers);
+    }
+
+    static boolean matches(BeanInfo bean, Type requiredType, Set<AnnotationInstance> requiredQualifiers) {
+        // Bean has all the required qualifiers and a bean type that matches the required type
+        return hasQualifiers(bean, requiredQualifiers) && matchesType(bean, requiredType);
     }
 
     static boolean matchesType(BeanInfo bean, Type requiredType) {
-        BeanResolver beanResolver = bean.getDeployment().getBeanResolver();
+        BeanResolverImpl beanResolver = bean.getDeployment().beanResolver;
         for (Type beanType : bean.getTypes()) {
             if (beanResolver.matches(requiredType, beanType)) {
                 return true;
@@ -459,10 +463,10 @@ final class Beans {
             // Skip built-in beans
             return;
         }
-        List<BeanInfo> resolved = deployment.getBeanResolver().resolve(injectionPoint.getTypeAndQualifiers());
+        List<BeanInfo> resolved = deployment.beanResolver.resolve(injectionPoint.getTypeAndQualifiers());
         BeanInfo selected = null;
         if (resolved.isEmpty()) {
-            List<BeanInfo> typeMatching = deployment.getBeanResolver().findTypeMatching(injectionPoint.getRequiredType());
+            List<BeanInfo> typeMatching = deployment.beanResolver.findTypeMatching(injectionPoint.getRequiredType());
 
             StringBuilder message = new StringBuilder("Unsatisfied dependency for type ");
             addStandardErroneousDependencyMessage(target, injectionPoint, message);
@@ -507,7 +511,7 @@ final class Beans {
         message.append(target);
     }
 
-    static BeanInfo resolveAmbiguity(List<BeanInfo> resolved) {
+    static BeanInfo resolveAmbiguity(Collection<BeanInfo> resolved) {
         List<BeanInfo> resolvedAmbiguity = new ArrayList<>(resolved);
         // First eliminate default beans
         for (Iterator<BeanInfo> iterator = resolvedAmbiguity.iterator(); iterator.hasNext();) {
@@ -589,22 +593,25 @@ final class Beans {
     }
 
     static boolean hasQualifier(BeanInfo bean, AnnotationInstance required) {
-        return hasQualifier(bean.getDeployment().getQualifier(required.name()), required, bean.getQualifiers());
+        return hasQualifier(bean.getDeployment(), required, bean.getQualifiers());
     }
 
-    static boolean hasQualifier(ClassInfo requiredInfo, AnnotationInstance required,
+    static boolean hasQualifier(BeanDeployment beanDeployment, AnnotationInstance requiredQualifier,
             Collection<AnnotationInstance> qualifiers) {
-        List<AnnotationValue> binding = new ArrayList<>();
-        for (AnnotationValue val : required.values()) {
-            if (!requiredInfo.method(val.name()).hasAnnotation(DotNames.NONBINDING)) {
-                binding.add(val);
+        ClassInfo requiredClazz = beanDeployment.getQualifier(requiredQualifier.name());
+        List<AnnotationValue> values = new ArrayList<>();
+        Set<String> nonBindingFields = beanDeployment.getQualifierNonbindingMembers(requiredQualifier.name());
+        for (AnnotationValue val : requiredQualifier.values()) {
+            if (!requiredClazz.method(val.name()).hasAnnotation(DotNames.NONBINDING)
+                    && !nonBindingFields.contains(val.name())) {
+                values.add(val);
             }
         }
         for (AnnotationInstance qualifier : qualifiers) {
-            if (required.name().equals(qualifier.name())) {
+            if (requiredQualifier.name().equals(qualifier.name())) {
                 // Must have the same annotation member value for each member which is not annotated @Nonbinding
                 boolean matches = true;
-                for (AnnotationValue value : binding) {
+                for (AnnotationValue value : values) {
                     if (!value.equals(qualifier.value(value.name()))) {
                         matches = false;
                         break;

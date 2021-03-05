@@ -51,10 +51,14 @@ import io.quarkus.qute.TemplateInstance;
  *     }
  * }
  * </pre>
+ * 
+ * @deprecated Use {@link io.quarkus.qute.CheckedTemplate} instead. This annotation will be removed at some point post Quarkus
+ *             1.13.
  */
 @Documented
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
+@Deprecated
 public @interface CheckedTemplate {
 
     /**

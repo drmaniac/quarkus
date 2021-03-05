@@ -7,13 +7,15 @@ import java.util.function.Function;
 import com.github.benmanes.caffeine.cache.AsyncCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
+import io.quarkus.cache.runtime.AbstractCache;
 import io.quarkus.cache.runtime.CacheException;
-import io.quarkus.cache.runtime.DefaultCacheKey;
 import io.quarkus.cache.runtime.NullValueConverter;
 
-public class CaffeineCache {
-
-    public static final String NULL_KEYS_NOT_SUPPORTED_MSG = "Null keys are not supported by the Quarkus application data cache";
+/**
+ * This class is an internal Quarkus cache implementation. Do not use it explicitly from your Quarkus application. The public
+ * methods signatures may change without prior notice.
+ */
+public class CaffeineCache extends AbstractCache {
 
     private AsyncCache<Object, Object> cache;
 
@@ -26,8 +28,6 @@ public class CaffeineCache {
     private Duration expireAfterWrite;
 
     private Duration expireAfterAccess;
-
-    private Object defaultKey;
 
     public CaffeineCache(CaffeineCacheInfo cacheInfo) {
         this.name = cacheInfo.name;
@@ -51,6 +51,11 @@ public class CaffeineCache {
         cache = builder.buildAsync();
     }
 
+    @Override
+    public String getName() {
+        return name;
+    }
+
     /**
      * Returns a {@link CompletableFuture} holding the cache value identified by {@code key}, obtaining that value from
      * {@code valueLoader} if necessary. The value computation is done synchronously on the calling thread and the
@@ -61,6 +66,7 @@ public class CaffeineCache {
      * @return a {@link CompletableFuture} holding the cache value
      * @throws CacheException if an exception is thrown during the cache value computation
      */
+    @Override
     public CompletableFuture<Object> get(Object key, Function<Object, Object> valueLoader) {
         if (key == null) {
             throw new NullPointerException(NULL_KEYS_NOT_SUPPORTED_MSG);
@@ -75,13 +81,13 @@ public class CaffeineCache {
                 cache.asMap().remove(key, newCacheValue);
                 newCacheValue.complete(new CaffeineComputationThrowable(t));
             }
-            return unwrapCacheValueOrThrowable(key, newCacheValue);
+            return unwrapCacheValueOrThrowable(newCacheValue);
         } else {
-            return unwrapCacheValueOrThrowable(key, existingCacheValue);
+            return unwrapCacheValueOrThrowable(existingCacheValue);
         }
     }
 
-    private CompletableFuture<Object> unwrapCacheValueOrThrowable(Object key, CompletableFuture<Object> cacheValue) {
+    private CompletableFuture<Object> unwrapCacheValueOrThrowable(CompletableFuture<Object> cacheValue) {
         return cacheValue.thenApply(new Function<Object, Object>() {
             @Override
             public Object apply(Object value) {
@@ -100,6 +106,7 @@ public class CaffeineCache {
         });
     }
 
+    @Override
     public void invalidate(Object key) {
         if (key == null) {
             throw new NullPointerException(NULL_KEYS_NOT_SUPPORTED_MSG);
@@ -107,12 +114,9 @@ public class CaffeineCache {
         cache.synchronous().invalidate(key);
     }
 
+    @Override
     public void invalidateAll() {
         cache.synchronous().invalidateAll();
-    }
-
-    public String getName() {
-        return name;
     }
 
     // For testing purposes only.
@@ -135,17 +139,7 @@ public class CaffeineCache {
         return expireAfterAccess;
     }
 
-    /**
-     * Returns the unique and immutable default key for the current cache. This key is used by the annotations caching API when
-     * a no-args method annotated with {@link io.quarkus.cache.CacheResult CacheResult} or
-     * {@link io.quarkus.cache.CacheInvalidate CacheInvalidate} is invoked.
-     * 
-     * @return default cache key
-     */
-    public Object getDefaultKey() {
-        if (defaultKey == null) {
-            defaultKey = new DefaultCacheKey(getName());
-        }
-        return defaultKey;
+    public long getSize() {
+        return cache.synchronous().estimatedSize();
     }
 }

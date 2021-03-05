@@ -48,11 +48,14 @@ public class ResourceNotFoundHandler implements Handler<RoutingContext> {
         if (!additionalEndpoints.isEmpty()) {
             builder.resourcesStart("Additional endpoints");
             for (String additionalEndpoint : additionalEndpoints) {
-                builder.staticResourcePath(adjustRoot(httpRoot, additionalEndpoint));
+                builder.staticResourcePath(additionalEndpoint);
             }
             builder.resourcesEnd();
         }
-        routingContext.response().putHeader("content-type", "text/html; charset=utf-8").end(builder.toString());
+        routingContext.response()
+                .setStatusCode(404)
+                .putHeader("content-type", "text/html; charset=utf-8")
+                .end(builder.toString());
     }
 
 }

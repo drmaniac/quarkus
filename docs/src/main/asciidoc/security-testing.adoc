@@ -14,7 +14,7 @@ This document describes how to test Quarkus Security.
 
 You can use link:security-properties[quarkus-elytron-security-properties-file] for testing security. This supports both embedding user info in `application.properties` and standalone properties files.
 
-For example, the following configuration will allow for configuring the users in both the production where OAuth2 is required and development modes using link:https://quarkus.io/guides/config#configuration-profiles[Configuration Profiles].
+For example, the following configuration will allow for configuring the users in both the production where OAuth2 is required and development modes using link:config#configuration-profiles[Configuration Profiles].
 
 [source,properties]
 ----
@@ -96,7 +96,7 @@ for example by setting `quarkus.http.auth.basic=true` or `%test.quarkus.http.aut
 == Use Wiremock for Integration Testing
 
 You can also use Wiremock to mock the authorization OAuth2 and OIDC services: 
-See link:security-oauth#integration-testing[OAuth2 Integration testing] for more details.
+See link:security-oauth2#integration-testing[OAuth2 Integration testing] for more details.
 
 == References
 

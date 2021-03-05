@@ -16,6 +16,7 @@ import io.quarkus.deployment.builditem.nativeimage.ReflectiveHierarchyBuildItem;
 
 public final class ResteasyDotNames {
 
+    public static final DotName APPLICATION = DotName.createSimple("javax.ws.rs.core.Application");
     public static final DotName CONSUMES = DotName.createSimple("javax.ws.rs.Consumes");
     public static final DotName PRODUCES = DotName.createSimple("javax.ws.rs.Produces");
     public static final DotName PROVIDER = DotName.createSimple("javax.ws.rs.ext.Provider");
@@ -44,6 +45,8 @@ public final class ResteasyDotNames {
             .createSimple("org.jboss.resteasy.annotations.jaxrs.MatrixParam");
     public static final DotName RESTEASY_SSE_ELEMENT_TYPE = DotName
             .createSimple("org.jboss.resteasy.annotations.SseElementType");
+    public static final DotName RESTEASY_PART_TYPE = DotName
+            .createSimple("org.jboss.resteasy.annotations.providers.multipart.PartType");
     public static final DotName CONFIG_PROPERTY = DotName
             .createSimple(ConfigProperty.class.getName());
     public static final DotName CDI_INSTANCE = DotName

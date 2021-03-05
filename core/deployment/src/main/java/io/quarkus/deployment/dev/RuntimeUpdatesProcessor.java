@@ -27,10 +27,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.eclipse.microprofile.config.ConfigProvider;
 import org.jboss.jandex.ClassInfo;
 import org.jboss.jandex.Index;
 import org.jboss.jandex.IndexView;
@@ -50,6 +53,7 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
     private static final Logger log = Logger.getLogger(RuntimeUpdatesProcessor.class);
 
     private static final String CLASS_EXTENSION = ".class";
+
     static volatile RuntimeUpdatesProcessor INSTANCE;
 
     private final Path applicationRoot;
@@ -60,6 +64,9 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
 
     // file path -> isRestartNeeded
     private volatile Map<String, Boolean> watchedFilePaths = Collections.emptyMap();
+
+    private volatile Predicate<ClassInfo> disableInstrumentationForClassPredicate = new AlwaysFalsePredicate<>();
+    private volatile Predicate<Index> disableInstrumentationForIndexPredicate = new AlwaysFalsePredicate<>();
 
     /**
      * A first scan is considered done when we have visited all modules at least once.
@@ -86,6 +93,7 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
     private final List<HotReplacementSetup> hotReplacementSetup = new ArrayList<>();
     private final BiConsumer<Set<String>, ClassScanResult> restartCallback;
     private final BiConsumer<DevModeContext.ModuleInfo, String> copyResourceNotification;
+    private final BiFunction<String, byte[], byte[]> classTransformers;
 
     /**
      * The index for the last successful start. Used to determine if the class has changed its structure
@@ -95,13 +103,15 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
 
     public RuntimeUpdatesProcessor(Path applicationRoot, DevModeContext context, ClassLoaderCompiler compiler,
             DevModeType devModeType, BiConsumer<Set<String>, ClassScanResult> restartCallback,
-            BiConsumer<DevModeContext.ModuleInfo, String> copyResourceNotification) {
+            BiConsumer<DevModeContext.ModuleInfo, String> copyResourceNotification,
+            BiFunction<String, byte[], byte[]> classTransformers) {
         this.applicationRoot = applicationRoot;
         this.context = context;
         this.compiler = compiler;
         this.devModeType = devModeType;
         this.restartCallback = restartCallback;
         this.copyResourceNotification = copyResourceNotification;
+        this.classTransformers = classTransformers;
     }
 
     @Override
@@ -188,7 +198,8 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
         boolean configFileRestartNeeded = filesChanged.stream().map(watchedFilePaths::get).anyMatch(Boolean.TRUE::equals);
 
         boolean instrumentationChange = false;
-        if (ClassChangeAgent.getInstrumentation() != null && lastStartIndex != null && !configFileRestartNeeded) {
+        if (ClassChangeAgent.getInstrumentation() != null && lastStartIndex != null && !configFileRestartNeeded
+                && devModeType != DevModeType.REMOTE_LOCAL_SIDE) {
             //attempt to do an instrumentation based reload
             //if only code has changed and not the class structure, then we can do a reload
             //using the JDK instrumentation API (assuming we were started with the javaagent)
@@ -202,15 +213,19 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                         byte[] bytes = Files.readAllBytes(i);
                         String name = indexer.index(new ByteArrayInputStream(bytes)).name().toString();
                         defs[index++] = new ClassDefinition(Thread.currentThread().getContextClassLoader().loadClass(name),
-                                bytes);
+                                classTransformers.apply(name, bytes));
                     }
                     Index current = indexer.complete();
-                    boolean ok = true;
-                    for (ClassInfo clazz : current.getKnownClasses()) {
-                        ClassInfo old = lastStartIndex.getClassByName(clazz.name());
-                        if (!ClassComparisonUtil.isSameStructure(clazz, old)) {
-                            ok = false;
-                            break;
+                    boolean ok = instrumentationEnabled()
+                            && !disableInstrumentationForIndexPredicate.test(current);
+                    if (ok) {
+                        for (ClassInfo clazz : current.getKnownClasses()) {
+                            ClassInfo old = lastStartIndex.getClassByName(clazz.name());
+                            if (!ClassComparisonUtil.isSameStructure(clazz, old)
+                                    || disableInstrumentationForClassPredicate.test(clazz)) {
+                                ok = false;
+                                break;
+                            }
                         }
                     }
 
@@ -254,6 +269,17 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
         return false;
     }
 
+    private Boolean instrumentationEnabled() {
+        ClassLoader old = Thread.currentThread().getContextClassLoader();
+        try {
+            Thread.currentThread().setContextClassLoader(getClass().getClassLoader());
+            return ConfigProvider.getConfig()
+                    .getOptionalValue("quarkus.dev.instrumentation", boolean.class).orElse(true);
+        } finally {
+            Thread.currentThread().setContextClassLoader(old);
+        }
+    }
+
     @Override
     public void addPreScanStep(Runnable runnable) {
         preScanSteps.add(runnable);
@@ -295,7 +321,6 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
     }
 
     ClassScanResult checkForChangedClasses() throws IOException {
-        boolean hasChanges = false;
         ClassScanResult classScanResult = new ClassScanResult();
         boolean ignoreFirstScanChanges = !firstScanDone;
 
@@ -348,8 +373,6 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
 
     private void checkForClassFilesChangesInModule(DevModeContext.ModuleInfo module, List<Path> moduleChangedSourceFiles,
             boolean isInitialRun, ClassScanResult classScanResult) {
-        boolean hasChanges = !moduleChangedSourceFiles.isEmpty();
-
         if (module.getClassesPath() == null) {
             return;
         }
@@ -445,7 +468,7 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
                 outputPath = rootPath;
                 doCopy = false;
             }
-            if (rootPath == null) {
+            if (rootPath == null || outputPath == null) {
                 continue;
             }
             Path root = Paths.get(rootPath);
@@ -545,6 +568,13 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
 
     private boolean classFileWasAdded(final Path classFilePath, boolean ignoreFirstScanChanges) {
         final Long lastRecordedChange = classFileChangeTimeStamps.get(classFilePath);
+        if (lastRecordedChange == null) {
+            try {
+                classFileChangeTimeStamps.put(classFilePath, Files.getLastModifiedTime(classFilePath).toMillis());
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
         return lastRecordedChange == null && !ignoreFirstScanChanges;
     }
 
@@ -567,6 +597,18 @@ public class RuntimeUpdatesProcessor implements HotReplacementContext, Closeable
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    public RuntimeUpdatesProcessor setDisableInstrumentationForClassPredicate(
+            Predicate<ClassInfo> disableInstrumentationForClassPredicate) {
+        this.disableInstrumentationForClassPredicate = disableInstrumentationForClassPredicate;
+        return this;
+    }
+
+    public RuntimeUpdatesProcessor setDisableInstrumentationForIndexPredicate(
+            Predicate<Index> disableInstrumentationForIndexPredicate) {
+        this.disableInstrumentationForIndexPredicate = disableInstrumentationForIndexPredicate;
+        return this;
     }
 
     public RuntimeUpdatesProcessor setWatchedFilePaths(Map<String, Boolean> watchedFilePaths) {

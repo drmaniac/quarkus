@@ -29,8 +29,7 @@ import org.jboss.jandex.MethodInfo;
 import org.jboss.jandex.Type;
 
 /**
- *
- * @author Martin Kouba
+ * Represents a CDI bean at build time.
  */
 public class BeanInfo implements InjectionTargetInfo {
 
@@ -205,7 +204,7 @@ public class BeanInfo implements InjectionTargetInfo {
         return beanDeployment;
     }
 
-    Type getProviderType() {
+    public Type getProviderType() {
         return providerType;
     }
 
@@ -339,6 +338,22 @@ public class BeanInfo implements InjectionTargetInfo {
         return defaultBean;
     }
 
+    /**
+     * @param requiredType
+     * @param requiredQualifiers
+     * @return {@code true} if this bean is assignable to the required type and qualifiers
+     */
+    public boolean isAssignableTo(Type requiredType, AnnotationInstance... requiredQualifiers) {
+        Set<AnnotationInstance> qualifiers;
+        if (requiredQualifiers.length == 0) {
+            qualifiers = Collections.emptySet();
+        } else {
+            qualifiers = new HashSet<>();
+            Collections.addAll(qualifiers, requiredQualifiers);
+        }
+        return Beans.matches(this, requiredType, qualifiers);
+    }
+
     Consumer<MethodCreator> getCreatorConsumer() {
         return creatorConsumer;
     }
@@ -451,7 +466,7 @@ public class BeanInfo implements InjectionTargetInfo {
         beanDeployment.getAnnotations(classInfo).stream()
                 .filter(a -> beanDeployment.getInterceptorBinding(a.name()) != null
                         && bindings.stream().noneMatch(e -> e.name().equals(a.name())))
-                .forEach(a -> bindings.add(a));
+                .forEach(bindings::add);
         if (classInfo.superClassType() != null && !classInfo.superClassType().name().equals(DotNames.OBJECT)) {
             ClassInfo superClass = getClassByName(beanDeployment.getBeanArchiveIndex(), classInfo.superName());
             if (superClass != null) {
@@ -470,9 +485,8 @@ public class BeanInfo implements InjectionTargetInfo {
         }
         if (constructor != null) {
             beanDeployment.getAnnotations(constructor).stream()
-                    .filter(a -> beanDeployment.getInterceptorBinding(a.name()) != null
-                            && bindings.stream().noneMatch(e -> e.name().equals(a.name())))
-                    .forEach(a -> bindings.add(a));
+                    .flatMap(a -> beanDeployment.extractInterceptorBindings(a).stream())
+                    .forEach(bindings::add);
         }
     }
 

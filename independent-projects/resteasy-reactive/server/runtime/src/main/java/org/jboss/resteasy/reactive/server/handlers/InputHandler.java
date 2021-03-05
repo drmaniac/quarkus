@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.function.Supplier;
 import javax.ws.rs.HttpMethod;
-import org.jboss.resteasy.reactive.common.util.EmptyInputStream;
 import org.jboss.resteasy.reactive.server.core.ResteasyReactiveRequestContext;
 import org.jboss.resteasy.reactive.server.spi.ServerHttpRequest;
 import org.jboss.resteasy.reactive.server.spi.ServerRestHandler;
@@ -19,7 +18,7 @@ import org.jboss.resteasy.reactive.server.spi.ServerRestHandler;
  * to allow the request to stay on the IO thread. If the request is too large
  * it will be delegated to an executor and a blocking stream used instead.
  * <p>
- * TODO: the stream implementation here could be a lot more efficent.
+ * TODO: the stream implementation here could be a lot more efficient.
  */
 public class InputHandler implements ServerRestHandler {
 
@@ -36,7 +35,7 @@ public class InputHandler implements ServerRestHandler {
     public void handle(ResteasyReactiveRequestContext context) throws Exception {
         // in some cases, with sub-resource locators or via request filters, 
         // it's possible we've already read the entity
-        if (context.getInputStream() != EmptyInputStream.INSTANCE) {
+        if (context.hasInputStream()) {
             // let's not set it twice
             return;
         }

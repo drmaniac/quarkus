@@ -47,7 +47,7 @@ However, you can go right to the completed example.
 
 Clone the Git repository: `git clone {quickstarts-clone-url}`, or download an {quickstarts-archive-url}[archive].
 
-The solution is located in the `getting-started-testing` directory.
+The solution is located in the `getting-started-testing` {quickstarts-tree-url}/getting-started-testing[directory].
 
 This guide assumes you already have the completed application from the `getting-started` directory.
 
@@ -330,7 +330,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.UUID;
 
-import static io.restassured.RestAssured.given;
+import static io.restassured.RestAssured.when;
 import static org.hamcrest.CoreMatchers.is;
 
 @QuarkusTest
@@ -339,8 +339,7 @@ public class GreetingResourceTest {
 
     @Test
     public void testHelloEndpoint() {
-        given()
-          .when().get()    //<2>
+        when().get()    //<2>
           .then()
              .statusCode(200)
              .body(is("hello"));
@@ -538,6 +537,103 @@ Now we have defined our profile we need to include it on our test class. We do t
 All the test profile config is stored in a single class, which makes it easy to tell if the previous test ran with the
 same configuration.
 
+=== Running specific tests
+
+Quarkus provides the ability to limit test execution to tests with specific  `@TestProfile` annotations.
+This works by leveraging the `tags` method of `QuarkusTestProfile` in conjunction with the `quarkus.test.profile.tags` system property.
+
+Essentially, any `QuarkusTestProfile` with at least one matching tag matching the value of `quarkus.test.profile.tags` will be considered active
+and all the tests annotated with `@TestProfile` of active profiles, will be run while the rest will be skipped.
+This is best shown in the following example.
+
+First let's define a few `QuarkusTestProfile` implementations like so:
+[source,java]
+----
+public class Profiles {
+
+    public static class NoTags implements QuarkusTestProfile {
+
+    }
+
+    public static class SingleTag implements QuarkusTestProfile {
+        @Override
+        public Set<String> tags() {
+            return Collections.singleton("test1");
+        }
+    }
+
+    public static class MultipleTags implements QuarkusTestProfile {
+        @Override
+        public Set<String> tags() {
+            return new HashSet<>(Arrays.asList("test1", "test2"));
+        }
+    }
+}
+----
+
+Now let's assume that we have the following tests:
+
+[source,java]
+----
+@QuarkusTest
+public class NoQuarkusProfileTest {
+
+    @Test
+    public void test() {
+        // test something
+    }
+}
+----
+
+[source,java]
+----
+@QuarkusTest
+@TestProfile(Profiles.NoTags.class)
+public class NoTagsTest {
+
+    @Test
+    public void test() {
+        // test something
+    }
+}
+----
+
+[source,java]
+----
+@QuarkusTest
+@TestProfile(Profiles.SingleTag.class)
+public class SingleTagTest {
+
+    @Test
+    public void test() {
+        // test something
+    }
+}
+----
+
+[source,java]
+----
+@QuarkusTest
+@TestProfile(Profiles.MultipleTags.class)
+public class MultipleTagsTest {
+
+    @Test
+    public void test() {
+        // test something
+    }
+}
+----
+
+Let's consider the following scenarios:
+
+* `quarkus.test.profile.tags` is not set: All tests will be executed.
+* `quarkus.test.profile.tags=foo`: In this case none of tests will be executed because none of the tags defined on the `QuarkusTestProfile` implementations match the value of `quarkus.test.profile.tags`.
+Note that `NoQuarkusProfileTest` is not executed either because it is not annotated with `@TestProfile`.
+* `quarkus.test.profile.tags=test1`: In this case `SingleTagTest` and `MultipleTagsTest` will be run because the tags on their respective `QuarkusTestProfile` implementations
+match the value of `quarkus.test.profile.tags`.
+* `quarkus.test.profile.tags=test1,test3`: This case results in the same tests being executed as the previous case.
+* `quarkus.test.profile.tags=test2,test3`: In this case only `MultipleTagsTest` will be run because `MultipleTagsTest` is the only `QuarkusTestProfile` implementation whose `tags` method
+matches the value of `quarkus.test.profile.tags`.
 
 == Mock Support
 
@@ -888,12 +984,80 @@ If you are using Quarkus Security, check out the link:security-testing[Testing S
 A very common need is to start some services on which your Quarkus application depends, before the Quarkus application starts for testing. To address this need, Quarkus provides `@io.quarkus.test.common.QuarkusTestResource` and `io.quarkus.test.common.QuarkusTestResourceLifecycleManager`.
 
 By simply annotating any test in the test suite with `@QuarkusTestResource`, Quarkus will run the corresponding `QuarkusTestResourceLifecycleManager` before any tests are run.
-A test suite is also free to utilize multiple `@QuarkusTestResource` annotations, in which case all the corresponding `QuarkusTestResourceLifecycleManager` objects will be run before the tests.
+A test suite is also free to utilize multiple `@QuarkusTestResource` annotations, in which case all the corresponding `QuarkusTestResourceLifecycleManager` objects will be run before the tests. When using multiple test resources they can be started concurrently. For that you need to set `@QuarkusTestResource(parallel = true)`.
+
+NOTE: test resources are global, even if they are defined on a test class or custom profile, which means they will all be activated for all tests, even though we do
+remove duplicates. If you want to only enable a test resource on a single test class or test profile, you can use `@QuarkusTestResource(restrictToAnnotatedClass = true)`.
 
 Quarkus provides a few implementations of `QuarkusTestResourceLifecycleManager` out of the box (see `io.quarkus.test.h2.H2DatabaseTestResource` which starts an H2 database, or `io.quarkus.test.kubernetes.client.KubernetesMockServerTestResource` which starts a mock Kubernetes API server),
 but it is common to create custom implementations to address specific application needs.
 Common cases include starting docker containers using https://www.testcontainers.org/[Testcontainers] (an example of which can be found https://github.com/quarkusio/quarkus-quickstarts/blob/master/kafka-quickstart/src/test/java/org/acme/kafka/KafkaResource.java[here]),
 or starting a mock HTTP server using http://wiremock.org/[Wiremock] (an example of which can be found https://github.com/geoand/quarkus-test-demo/blob/master/src/test/java/org/acme/getting/started/country/WiremockCountries.java[here]).
+
+=== Annotation-based test resources
+
+It is possible to write test resources that are enabled and configured using annotations. This is enabled by placing the `@QuarkusTestResource`
+on an annotation which will be used to enable and configure the test resource.
+
+For example, this defines the `@WithKubernetesTestServer` annotation, which you can use on your tests to activate the `KubernetesServerTestResource`,
+but only for the annotated test class. You can also place them on your `QuarkusTestProfile` test profiles.
+
+[source,java]
+----
+@QuarkusTestResource(KubernetesServerTestResource.class)
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.TYPE)
+public @interface WithKubernetesTestServer {
+    /**
+     * Start it with HTTPS
+     */
+    boolean https() default false;
+
+    /**
+     * Start it in CRUD mode
+     */
+    boolean crud() default true;
+
+    /**
+     * Port to use, defaults to any available port
+     */
+    int port() default 0;
+}
+----
+
+The `KubernetesServerTestResource` class has to implement the
+`QuarkusTestResourceConfigurableLifecycleManager` interface in order to be configured using the previous annotation:
+
+[source,java]
+----
+public class KubernetesServerTestResource
+        implements QuarkusTestResourceConfigurableLifecycleManager<WithKubernetesTestServer> {
+
+    private boolean https = false;
+    private boolean crud = true;
+    private int port = 0;
+
+    @Override
+    public void init(WithKubernetesTestServer annotation) {
+        this.https = annotation.https();
+        this.crud = annotation.crud();
+        this.port = annotation.port();
+    }
+
+    // ...
+}
+----
+
+== Hang Detection
+
+`@QuarkusTest` has support for hang detection to help diagnose any unexpected hangs. If no progress is made for a specified
+time (i.e. no JUnit callbacks are invoked) then Quarkus will print a stack trace to the console to help diagnose the hang.
+The default value for this timeout is 10 minutes.
+
+No further action will be taken, and the tests will continue as normal (generally until CI times out), however the printed
+stack traces should help diagnose why the build has failed. You can control this timeout with the
+`quarkus.test.hang-detection-timeout` system property (you can also set this in application.properties, but this won't
+be read until Quarkus has started, so the timeout for Quarkus start will be the default of 10 minutes).
 
 == Native Executable Testing
 
@@ -903,6 +1067,23 @@ guide except injecting into tests (and the native executable runs in a separate 
 
 This is covered in the link:building-native-image[Native Executable Guide].
 
+[WARNING]
+====
+Although `@NativeImageTest` is not yet deprecated, it will be in the future as it's functionality is covered by `@QuarkusIntegrationTest`
+which is described in the following section.
+====
+
+[#quarkus-integration-test]
+== Using @QuarkusIntegrationTest
+
+`@QuarkusIntegrationTest` should be used to launch and test the artifact produced by the Quarkus build, and supports testing a jar (of whichever type), a native image or container-image.
+Put simply, this means that if the result of a Quarkus build (`mvn package` or `gradle build`) is a jar, that jar will be launched as `java -jar ...` and tests run against it.
+If instead a native image was build, then the application is launched as `./application ...` and again the tests run against the running application.
+Finally, if a container image was created during the build (by using including the `quarkus-container-image-jib` or `quarkus-container-image-docker` extensions and having the
+`quarkus.container-image.build=true` property configured), then a container is created and run (this requires the `docker` executable being present).
+
+As is the case with `@NativeImageTest`, this is a black box test that supports the same set features and has the same limitations.
+
 [[test-from-ide]]
 == Running `@QuarkusTest` from an IDE
 
@@ -910,7 +1091,7 @@ Most IDEs offer the possibility to run a selected class as JUnit test directly. 
 
 * `java.util.logging.manager` (see link:logging[Logging Guide])
 
-* `maven.home` (only if there are any custom settings in `${maven.home}/conf/settings.mxl`, see link:maven-tooling[Maven Guide])
+* `maven.home` (only if there are any custom settings in `${maven.home}/conf/settings.xml`, see link:maven-tooling[Maven Guide])
 
 * `maven.settings` (in case a custom version of `settings.xml` file should be used for the tests)
 

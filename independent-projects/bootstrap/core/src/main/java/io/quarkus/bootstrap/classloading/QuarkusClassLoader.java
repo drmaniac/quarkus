@@ -27,10 +27,7 @@ import java.util.jar.Manifest;
 import org.jboss.logging.Logger;
 
 /**
- * The ClassLoader used for non production Quarkus applications (i.e. dev and test mode). Production
- * applications use a flat classpath so just use the system class loader.
- *
- *
+ * The ClassLoader used for non production Quarkus applications (i.e. dev and test mode).
  */
 public class QuarkusClassLoader extends ClassLoader implements Closeable {
 
@@ -45,6 +42,7 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
     private final String name;
     private final List<ClassPathElement> elements;
     private final ConcurrentMap<ClassPathElement, ProtectionDomain> protectionDomains = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Package> definedPackages = new ConcurrentHashMap<>();
     private final ClassLoader parent;
     /**
      * If this is true it will attempt to load from the parent first
@@ -54,6 +52,7 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
     private final List<ClassPathElement> bannedElements;
     private final List<ClassPathElement> parentFirstElements;
     private final List<ClassPathElement> lesserPriorityElements;
+    private final List<ClassLoaderEventListener> classLoaderEventListeners;
 
     /**
      * The element that holds resettable in-memory classses.
@@ -71,6 +70,7 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
     private volatile MemoryClassPathElement resettableElement;
     private volatile MemoryClassPathElement transformedClasses;
     private volatile ClassLoaderState state;
+    private final List<Runnable> closeTasks = new ArrayList<>();
 
     static final ClassLoader PLATFORM_CLASS_LOADER;
 
@@ -88,15 +88,7 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
     private volatile boolean driverLoaded;
 
     private QuarkusClassLoader(Builder builder) {
-        //we need the parent to be null
-        //as MP has super broken class loading where it attempts to resolve stuff from the parent
-        //will hopefully be fixed in 1.4
-        //e.g. https://github.com/eclipse/microprofile-config/issues/390
-        //e.g. https://github.com/eclipse/microprofile-reactive-streams-operators/pull/130
-        //to further complicate things we also have https://github.com/quarkusio/quarkus/issues/8985
-        //where getParent must work to load JDK services on JDK9+
-        //to get around this we pass in the platform ClassLoader, if it exists
-        super(PLATFORM_CLASS_LOADER);
+        super(new GetPackageBlockingClassLoader(builder.parent));
         this.name = builder.name;
         this.elements = builder.elements;
         this.bannedElements = builder.bannedElements;
@@ -107,6 +99,8 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
         this.resettableElement = builder.resettableElement;
         this.transformedClasses = new MemoryClassPathElement(builder.transformedClasses);
         this.aggregateParentResources = builder.aggregateParentResources;
+        this.classLoaderEventListeners = builder.classLoaderEventListeners.isEmpty() ? Collections.emptyList()
+                : builder.classLoaderEventListeners;
     }
 
     public static Builder builder(String name, ClassLoader parent, boolean parentFirst) {
@@ -140,6 +134,9 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
 
     @Override
     public Enumeration<URL> getResources(String unsanitisedName) throws IOException {
+        for (ClassLoaderEventListener l : classLoaderEventListeners) {
+            l.enumeratingResourceURLs(unsanitisedName, this.name);
+        }
         boolean endsWithTrailingSlash = unsanitisedName.endsWith("/");
         ClassLoaderState state = getState();
         String name = sanitizeName(unsanitisedName);
@@ -269,9 +266,12 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
     }
 
     @Override
-    public URL getResource(String unsantisedName) {
-        boolean endsWithTrailingSlash = unsantisedName.endsWith("/");
-        String name = sanitizeName(unsantisedName);
+    public URL getResource(String unsanitisedName) {
+        for (ClassLoaderEventListener l : classLoaderEventListeners) {
+            l.gettingURLFromResource(unsanitisedName, this.name);
+        }
+        boolean endsWithTrailingSlash = unsanitisedName.endsWith("/");
+        String name = sanitizeName(unsanitisedName);
         ClassLoaderState state = getState();
         if (state.bannedResources.contains(name)) {
             return null;
@@ -305,11 +305,14 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
                 }
             }
         }
-        return parent.getResource(unsantisedName);
+        return parent.getResource(unsanitisedName);
     }
 
     @Override
     public InputStream getResourceAsStream(String unsanitisedName) {
+        for (ClassLoaderEventListener l : classLoaderEventListeners) {
+            l.openResourceStream(unsanitisedName, this.name);
+        }
         String name = sanitizeName(unsanitisedName);
         ClassLoaderState state = getState();
         if (state.bannedResources.contains(name)) {
@@ -362,11 +365,17 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
 
     @Override
     public Class<?> loadClass(String name) throws ClassNotFoundException {
+        for (ClassLoaderEventListener l : classLoaderEventListeners) {
+            l.loadClass(name, this.name);
+        }
         return loadClass(name, false);
     }
 
     @Override
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+        for (ClassLoaderEventListener l : classLoaderEventListeners) {
+            l.loadClass(name, this.name);
+        }
         if (name.startsWith(JAVA)) {
             return parent.loadClass(name);
         }
@@ -424,23 +433,25 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
 
     private void definePackage(String name, ClassPathElement classPathElement) {
         final String pkgName = getPackageNameFromClassName(name);
-        if ((pkgName != null) && getPackage(pkgName) == null) {
+        //we can't use getPackage here
+        //if can return a package from the parent
+        if ((pkgName != null) && definedPackages.get(pkgName) == null) {
             synchronized (getClassLoadingLock(pkgName)) {
-                if (getPackage(pkgName) == null) {
+                if (definedPackages.get(pkgName) == null) {
                     Manifest mf = classPathElement.getManifest();
                     if (mf != null) {
                         Attributes ma = mf.getMainAttributes();
-                        definePackage(pkgName, ma.getValue(Attributes.Name.SPECIFICATION_TITLE),
+                        definedPackages.put(pkgName, definePackage(pkgName, ma.getValue(Attributes.Name.SPECIFICATION_TITLE),
                                 ma.getValue(Attributes.Name.SPECIFICATION_VERSION),
                                 ma.getValue(Attributes.Name.SPECIFICATION_VENDOR),
                                 ma.getValue(Attributes.Name.IMPLEMENTATION_TITLE),
                                 ma.getValue(Attributes.Name.IMPLEMENTATION_VERSION),
-                                ma.getValue(Attributes.Name.IMPLEMENTATION_VENDOR), null);
+                                ma.getValue(Attributes.Name.IMPLEMENTATION_VENDOR), null));
                         return;
                     }
 
                     // this could certainly be improved to use the actual manifest
-                    definePackage(pkgName, null, null, null, null, null, null, null);
+                    definedPackages.put(pkgName, definePackage(pkgName, null, null, null, null, null, null, null));
                 }
             }
         }
@@ -479,6 +490,10 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
         return super.defineClass(name, b, off, len);
     }
 
+    public void addCloseTask(Runnable task) {
+        closeTasks.add(task);
+    }
+
     @Override
     public void close() {
         synchronized (this) {
@@ -486,6 +501,13 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
                 return;
             }
             closed = true;
+        }
+        for (Runnable i : closeTasks) {
+            try {
+                i.run();
+            } catch (Throwable t) {
+                log.error("Failed to run close task", t);
+            }
         }
         if (driverLoaded) {
             //DriverManager only lets you remove drivers with the same CL as the caller
@@ -529,6 +551,7 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
         MemoryClassPathElement resettableElement;
         private Map<String, byte[]> transformedClasses = Collections.emptyMap();
         boolean aggregateParentResources;
+        private final ArrayList<ClassLoaderEventListener> classLoaderEventListeners = new ArrayList<>(5);
 
         public Builder(String name, ClassLoader parent, boolean parentFirst) {
             this.name = name;
@@ -639,6 +662,11 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
             return this;
         }
 
+        public Builder addClassLoaderEventListeners(List<ClassLoaderEventListener> classLoadListeners) {
+            this.classLoaderEventListeners.addAll(classLoadListeners);
+            return this;
+        }
+
         /**
          * Builds the class loader
          *
@@ -650,8 +678,10 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
                     elements.add(0, resettableElement);
                 }
             }
+            this.classLoaderEventListeners.trimToSize();
             return new QuarkusClassLoader(this);
         }
+
     }
 
     public ClassLoader parent() {
@@ -669,6 +699,26 @@ public class QuarkusClassLoader extends ClassLoader implements Closeable {
             this.loadableResources = loadableResources;
             this.bannedResources = bannedResources;
             this.parentFirstResources = parentFirstResources;
+        }
+    }
+
+    /**
+     * Horrible JDK8 hack
+     *
+     * getPackage() on JDK8 will always delegate to the parent, so QuarkusClassLoader will never define a package,
+     * which can cause issues if you then try and read package annotations as they will be from the wrong ClassLoader.
+     *
+     * We add this ClassLoader into the mix to block the getPackage() delegation.
+     */
+    private static class GetPackageBlockingClassLoader extends ClassLoader {
+
+        protected GetPackageBlockingClassLoader(ClassLoader parent) {
+            super(parent);
+        }
+
+        @Override
+        protected Package getPackage(String name) {
+            return null;
         }
     }
 }

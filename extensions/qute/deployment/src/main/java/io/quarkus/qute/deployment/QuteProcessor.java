@@ -1,5 +1,6 @@
 package io.quarkus.qute.deployment;
 
+import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
 import static io.quarkus.deployment.annotations.ExecutionTime.STATIC_INIT;
 import static java.util.stream.Collectors.toMap;
 
@@ -8,6 +9,7 @@ import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
 import java.lang.reflect.Modifier;
+import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,8 +27,9 @@ import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
@@ -43,21 +46,23 @@ import org.jboss.jandex.FieldInfo;
 import org.jboss.jandex.IndexView;
 import org.jboss.jandex.MethodInfo;
 import org.jboss.jandex.ParameterizedType;
+import org.jboss.jandex.PrimitiveType;
+import org.jboss.jandex.PrimitiveType.Primitive;
 import org.jboss.jandex.Type;
 import org.jboss.jandex.TypeVariable;
 import org.jboss.logging.Logger;
 
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.BeanArchiveIndexBuildItem;
-import io.quarkus.arc.deployment.BeanRegistrationPhaseBuildItem;
-import io.quarkus.arc.deployment.BeanRegistrationPhaseBuildItem.BeanConfiguratorBuildItem;
+import io.quarkus.arc.deployment.BeanDiscoveryFinishedBuildItem;
+import io.quarkus.arc.deployment.QualifierRegistrarBuildItem;
 import io.quarkus.arc.deployment.SyntheticBeanBuildItem;
 import io.quarkus.arc.deployment.ValidationPhaseBuildItem;
 import io.quarkus.arc.deployment.ValidationPhaseBuildItem.ValidationErrorBuildItem;
 import io.quarkus.arc.processor.BeanInfo;
-import io.quarkus.arc.processor.BuildExtension;
 import io.quarkus.arc.processor.DotNames;
 import io.quarkus.arc.processor.InjectionPointInfo;
+import io.quarkus.arc.processor.QualifierRegistrar;
 import io.quarkus.bootstrap.classloading.QuarkusClassLoader;
 import io.quarkus.deployment.ApplicationArchive;
 import io.quarkus.deployment.Feature;
@@ -75,7 +80,11 @@ import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
 import io.quarkus.deployment.util.JandexUtil;
+import io.quarkus.dev.console.DevConsoleManager;
+import io.quarkus.devconsole.spi.DevConsoleRouteBuildItem;
 import io.quarkus.gizmo.ClassOutput;
+import io.quarkus.panache.common.deployment.PanacheEntityClassesBuildItem;
+import io.quarkus.qute.CheckedTemplate;
 import io.quarkus.qute.Engine;
 import io.quarkus.qute.EngineBuilder;
 import io.quarkus.qute.Expression;
@@ -87,6 +96,7 @@ import io.quarkus.qute.ParserHook;
 import io.quarkus.qute.ResultNode;
 import io.quarkus.qute.SectionHelper;
 import io.quarkus.qute.SectionHelperFactory;
+import io.quarkus.qute.SetSectionHelper;
 import io.quarkus.qute.Template;
 import io.quarkus.qute.TemplateException;
 import io.quarkus.qute.TemplateExtension;
@@ -95,7 +105,6 @@ import io.quarkus.qute.TemplateLocator;
 import io.quarkus.qute.UserTagSectionHelper;
 import io.quarkus.qute.Variant;
 import io.quarkus.qute.WhenSectionHelper;
-import io.quarkus.qute.api.CheckedTemplate;
 import io.quarkus.qute.api.ResourcePath;
 import io.quarkus.qute.deployment.TemplatesAnalysisBuildItem.TemplateAnalysis;
 import io.quarkus.qute.deployment.TypeCheckExcludeBuildItem.TypeCheck;
@@ -110,17 +119,39 @@ import io.quarkus.qute.runtime.QuteConfig;
 import io.quarkus.qute.runtime.QuteRecorder;
 import io.quarkus.qute.runtime.QuteRecorder.QuteContext;
 import io.quarkus.qute.runtime.TemplateProducer;
+import io.quarkus.qute.runtime.devmode.QuteDevConsoleRecorder;
 import io.quarkus.qute.runtime.extensions.CollectionTemplateExtensions;
 import io.quarkus.qute.runtime.extensions.ConfigTemplateExtensions;
 import io.quarkus.qute.runtime.extensions.MapTemplateExtensions;
 import io.quarkus.qute.runtime.extensions.NumberTemplateExtensions;
 import io.quarkus.qute.runtime.extensions.TimeTemplateExtensions;
+import io.vertx.core.Handler;
+import io.vertx.core.MultiMap;
+import io.vertx.core.json.DecodeException;
+import io.vertx.core.json.Json;
+import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.JsonObject;
+import io.vertx.ext.web.RoutingContext;
 
 public class QuteProcessor {
 
     public static final DotName RESOURCE_PATH = Names.RESOURCE_PATH;
 
     private static final Logger LOGGER = Logger.getLogger(QuteProcessor.class);
+
+    private static final Function<FieldInfo, String> GETTER_FUN = new Function<FieldInfo, String>() {
+        @Override
+        public String apply(FieldInfo field) {
+            String prefix;
+            if (field.type().kind() == org.jboss.jandex.Type.Kind.PRIMITIVE
+                    && field.type().asPrimitiveType().primitive() == Primitive.BOOLEAN) {
+                prefix = ValueResolverGenerator.IS_PREFIX;
+            } else {
+                prefix = ValueResolverGenerator.GET_PREFIX;
+            }
+            return prefix + ValueResolverGenerator.capitalize(field.name());
+        }
+    };
 
     @BuildStep
     FeatureBuildItem feature() {
@@ -181,10 +212,11 @@ public class QuteProcessor {
     }
 
     @BuildStep
-    List<CheckedTemplateBuildItem> collectTemplateTypeInfo(BeanArchiveIndexBuildItem index,
+    List<CheckedTemplateBuildItem> collectCheckedTemplates(BeanArchiveIndexBuildItem index,
             BuildProducer<BytecodeTransformerBuildItem> transformers,
             List<TemplatePathBuildItem> templatePaths,
-            List<CheckedTemplateAdapterBuildItem> templateAdaptorBuildItems) {
+            List<CheckedTemplateAdapterBuildItem> templateAdaptorBuildItems,
+            QuteConfig config) {
         List<CheckedTemplateBuildItem> ret = new ArrayList<>();
 
         Map<DotName, CheckedTemplateAdapter> adaptors = new HashMap<>();
@@ -211,9 +243,28 @@ public class QuteProcessor {
         // template path -> checked template method
         Map<String, MethodInfo> checkedTemplateMethods = new HashMap<>();
 
-        for (AnnotationInstance annotation : index.getIndex().getAnnotations(Names.CHECKED_TEMPLATE)) {
-            if (annotation.target().kind() != Kind.CLASS)
+        Set<AnnotationInstance> checkedTemplateAnnotations = new HashSet<>();
+        checkedTemplateAnnotations.addAll(index.getIndex().getAnnotations(Names.CHECKED_TEMPLATE_OLD));
+        checkedTemplateAnnotations.addAll(index.getIndex().getAnnotations(Names.CHECKED_TEMPLATE));
+
+        // Build a set of file paths for validation
+        Set<String> filePaths = new HashSet<String>();
+        for (TemplatePathBuildItem templatePath : templatePaths) {
+            String path = templatePath.getPath();
+            filePaths.add(path);
+            // Also add version without suffix from the path
+            // For example for "items.html" also add "items"
+            for (String suffix : config.suffixes) {
+                if (path.endsWith(suffix)) {
+                    filePaths.add(path.substring(0, path.length() - (suffix.length() + 1)));
+                }
+            }
+        }
+
+        for (AnnotationInstance annotation : checkedTemplateAnnotations) {
+            if (annotation.target().kind() != Kind.CLASS) {
                 continue;
+            }
             ClassInfo classInfo = annotation.target().asClass();
             NativeCheckedTemplateEnhancer enhancer = new NativeCheckedTemplateEnhancer();
             for (MethodInfo methodInfo : classInfo.methods()) {
@@ -257,7 +308,23 @@ public class QuteProcessor {
                                     templatePath, methodInfo.declaringClass().name(), methodInfo,
                                     checkedTemplateMethod.declaringClass().name(), checkedTemplateMethod));
                 }
-                checkTemplatePath(templatePath, templatePaths, classInfo, methodInfo);
+                if (!filePaths.contains(templatePath)) {
+                    List<String> startsWith = new ArrayList<>();
+                    for (String filePath : filePaths) {
+                        if (filePath.startsWith(templatePath)) {
+                            startsWith.add(filePath);
+                        }
+                    }
+                    if (startsWith.isEmpty()) {
+                        throw new TemplateException(
+                                "No template matching the path " + templatePath + " could be found for: "
+                                        + classInfo.name() + "." + methodInfo.name());
+                    } else {
+                        throw new TemplateException(
+                                startsWith + " match the path " + templatePath
+                                        + " but the file suffix is not configured via the quarkus.qute.suffixes property");
+                    }
+                }
 
                 Map<String, String> bindings = new HashMap<>();
                 List<Type> parameters = methodInfo.parameters();
@@ -272,7 +339,7 @@ public class QuteProcessor {
                     bindings.put(name, JandexUtil.getBoxedTypeName(type));
                     parameterNames.add(name);
                 }
-                ret.add(new CheckedTemplateBuildItem(templatePath, bindings));
+                ret.add(new CheckedTemplateBuildItem(templatePath, bindings, methodInfo));
                 enhancer.implement(methodInfo, templatePath, parameterNames, adaptor);
             }
             transformers.produce(new BytecodeTransformerBuildItem(classInfo.name().toString(),
@@ -280,26 +347,6 @@ public class QuteProcessor {
         }
 
         return ret;
-    }
-
-    private void checkTemplatePath(String templatePath, List<TemplatePathBuildItem> templatePaths, ClassInfo enclosingClass,
-            MethodInfo methodInfo) {
-        for (TemplatePathBuildItem templatePathBuildItem : templatePaths) {
-            // perfect match
-            if (templatePathBuildItem.getPath().equals(templatePath)) {
-                return;
-            }
-            // if our templatePath is "Foo/hello", make it match "Foo/hello.txt"
-            // if they're not equal and they start with our path, there must be something left after
-            if (templatePathBuildItem.getPath().startsWith(templatePath)
-                    // check that we have an extension, let variant matching work later
-                    && templatePathBuildItem.getPath().charAt(templatePath.length()) == '.') {
-                return;
-            }
-        }
-        throw new TemplateException(
-                "Declared template " + templatePath + " could not be found. Either add it or delete its declaration in "
-                        + enclosingClass.name().toString('.') + "." + methodInfo.name());
     }
 
     @BuildStep
@@ -332,7 +379,7 @@ public class QuteProcessor {
                     return new SectionHelper() {
                         @Override
                         public CompletionStage<ResultNode> resolve(SectionResolutionContext context) {
-                            return CompletableFuture.completedFuture(ResultNode.NOOP);
+                            return ResultNode.NOOP;
                         }
                     };
                 }
@@ -366,28 +413,25 @@ public class QuteProcessor {
         }).addParserHook(new ParserHook() {
 
             @Override
-            public void beforeParsing(ParserHelper parserHelper, String id) {
-                if (id != null) {
-                    for (CheckedTemplateBuildItem checkedTemplate : checkedTemplates) {
-                        // FIXME: check for dot/extension?
-                        if (id.startsWith(checkedTemplate.templateId)) {
-                            for (Entry<String, String> entry : checkedTemplate.bindings.entrySet()) {
-                                parserHelper.addParameter(entry.getKey(), entry.getValue());
-                            }
+            public void beforeParsing(ParserHelper parserHelper) {
+                for (CheckedTemplateBuildItem checkedTemplate : checkedTemplates) {
+                    // FIXME: check for dot/extension?
+                    if (parserHelper.getTemplateId().startsWith(checkedTemplate.templateId)) {
+                        for (Entry<String, String> entry : checkedTemplate.bindings.entrySet()) {
+                            parserHelper.addParameter(entry.getKey(), entry.getValue());
                         }
                     }
-
-                    // Add params to message bundle templates
-                    for (MessageBundleMethodBuildItem messageBundleMethod : messageBundleMethods) {
-                        if (id.equals(messageBundleMethod.getTemplateId())) {
-                            MethodInfo method = messageBundleMethod.getMethod();
-                            for (ListIterator<Type> it = method.parameters().listIterator(); it.hasNext();) {
-                                Type paramType = it.next();
-                                parserHelper.addParameter(method.parameterName(it.previousIndex()),
-                                        JandexUtil.getBoxedTypeName(paramType));
-                            }
-                            break;
+                }
+                // Add params to message bundle templates
+                for (MessageBundleMethodBuildItem messageBundleMethod : messageBundleMethods) {
+                    if (parserHelper.getTemplateId().equals(messageBundleMethod.getTemplateId())) {
+                        MethodInfo method = messageBundleMethod.getMethod();
+                        for (ListIterator<Type> it = method.parameters().listIterator(); it.hasNext();) {
+                            Type paramType = it.next();
+                            parserHelper.addParameter(method.parameterName(it.previousIndex()),
+                                    JandexUtil.getBoxedTypeName(paramType));
                         }
+                        break;
                     }
                 }
             }
@@ -422,9 +466,7 @@ public class QuteProcessor {
             List<TypeCheckExcludeBuildItem> excludes,
             BuildProducer<IncorrectExpressionBuildItem> incorrectExpressions,
             BuildProducer<ImplicitValueResolverBuildItem> implicitClasses,
-            BeanRegistrationPhaseBuildItem registrationPhase,
-            // This producer is needed to ensure the correct ordering, ie. this build step must be executed before the ArC validation step
-            BuildProducer<BeanConfiguratorBuildItem> configurators) {
+            BeanDiscoveryFinishedBuildItem beanDiscovery) {
 
         IndexView index = beanArchiveIndex.getIndex();
         Function<String, String> templateIdToPathFun = new Function<String, String>() {
@@ -437,11 +479,11 @@ public class QuteProcessor {
         // IMPLEMENTATION NOTE: 
         // We do not support injection of synthetic beans with names 
         // Dependency on the ValidationPhaseBuildItem would result in a cycle in the build chain
-        Map<String, BeanInfo> namedBeans = registrationPhase.getContext().beans().withName()
+        Map<String, BeanInfo> namedBeans = beanDiscovery.beanStream().withName()
                 .collect(toMap(BeanInfo::getName, Function.identity()));
 
         // Map implicit class -> set of used members
-        Map<ClassInfo, Set<String>> implicitClassToMembersUsed = new HashMap<>();
+        Map<DotName, Set<String>> implicitClassToMembersUsed = new HashMap<>();
 
         for (TemplateAnalysis templateAnalysis : templatesAnalysis.getAnalysis()) {
             // Maps an expression generated id to the last match of an expression (i.e. the type of the last part)
@@ -470,9 +512,12 @@ public class QuteProcessor {
             }
         }
 
-        for (Entry<ClassInfo, Set<String>> entry : implicitClassToMembersUsed.entrySet()) {
-            implicitClasses.produce(new ImplicitValueResolverBuildItem(entry.getKey(),
-                    new TemplateDataBuilder().addIgnore(buildIgnorePattern(entry.getValue())).build()));
+        for (Entry<DotName, Set<String>> entry : implicitClassToMembersUsed.entrySet()) {
+            ClassInfo clazz = index.getClassByName(entry.getKey());
+            if (clazz != null) {
+                implicitClasses.produce(new ImplicitValueResolverBuildItem(clazz,
+                        new TemplateDataBuilder().addIgnore(buildIgnorePattern(entry.getValue())).build()));
+            }
         }
     }
 
@@ -491,7 +536,6 @@ public class QuteProcessor {
     }
 
     /**
-     * 
      * @param templateAnalysis
      * @param rootClazz
      * @param results Map of cached results within a single expression
@@ -508,7 +552,7 @@ public class QuteProcessor {
             List<TemplateExtensionMethodBuildItem> templateExtensionMethods,
             List<TypeCheckExcludeBuildItem> excludes,
             BuildProducer<IncorrectExpressionBuildItem> incorrectExpressions, Expression expression, IndexView index,
-            Map<ClassInfo, Set<String>> implicitClassToMembersUsed, Function<String, String> templateIdToPathFun,
+            Map<DotName, Set<String>> implicitClassToMembersUsed, Function<String, String> templateIdToPathFun,
             Map<Integer, Match> generatedIdsToMatches) {
 
         // First validate nested virtual methods
@@ -524,7 +568,7 @@ public class QuteProcessor {
             }
         }
         // Then validate the expression itself
-        Match match = new Match();
+        Match match = new Match(index);
         if (rootClazz == null && !expression.hasTypeInfo()) {
             // No type info available or a namespace expression
             results.put(expression.toOriginalString(), match);
@@ -538,17 +582,16 @@ public class QuteProcessor {
         if (rootClazz == null) {
             if (root.isTypeInfo()) {
                 // E.g. |org.acme.Item|
-                match.clazz = root.asTypeInfo().rawClass;
-                match.type = root.asTypeInfo().resolvedType;
-                if (root.asTypeInfo().hint != null) {
-                    processHints(templateAnalysis, root.asTypeInfo().hint, match, index, expression, generatedIdsToMatches,
+                match.setValues(root.asTypeInfo().rawClass, root.asTypeInfo().resolvedType);
+                if (root.asTypeInfo().hasHints()) {
+                    processHints(templateAnalysis, root.asTypeInfo().hints, match, index, expression, generatedIdsToMatches,
                             incorrectExpressions);
                 }
             } else {
-                if (root.isProperty() && root.asProperty().hint != null) {
+                if (root.isProperty() && root.asProperty().hasHints()) {
                     // Root is not a type info but a property with hint
                     // E.g. 'it<loop#123>' and 'STATUS<when#123>'
-                    if (processHints(templateAnalysis, root.asProperty().hint, match, index, expression,
+                    if (processHints(templateAnalysis, root.asProperty().hints, match, index, expression,
                             generatedIdsToMatches, incorrectExpressions)) {
                         // In some cases it's necessary to reset the iterator
                         iterator = parts.iterator();
@@ -561,46 +604,98 @@ public class QuteProcessor {
             }
         } else {
             // The first part is skipped, e.g. for {inject:foo.name} the first part is the name of the bean
-            match.clazz = rootClazz;
-            match.type = Type.create(rootClazz.name(), org.jboss.jandex.Type.Kind.CLASS);
+            match.setValues(rootClazz, Type.create(rootClazz.name(), org.jboss.jandex.Type.Kind.CLASS));
         }
 
         while (iterator.hasNext()) {
-            // Now iterate over all parts of the expression and check each part against the current "match class"
+            // Now iterate over all parts of the expression and check each part against the current match type
             Info info = iterator.next();
-            if (match.clazz != null) {
-                // By default, we only consider properties
-                Set<String> membersUsed = implicitClassToMembersUsed.computeIfAbsent(match.clazz, c -> new HashSet<>());
-                AnnotationTarget member = null;
-                // First try to find java members
-                if (info.isVirtualMethod()) {
-                    member = findMethod(info.part.asVirtualMethod(), match.clazz, expression, index, templateIdToPathFun,
-                            results);
-                    if (member != null) {
-                        membersUsed.add(member.asMethod().name());
-                    }
-                } else if (info.isProperty()) {
-                    member = findProperty(info.asProperty().name, match.clazz, index);
-                    if (member != null) {
-                        membersUsed.add(member.kind() == Kind.FIELD ? member.asField().name() : member.asMethod().name());
+            if (!match.isEmpty()) {
+
+                // Arrays are handled specifically
+                // We use the built-in resolver at runtime because the extension methods cannot be used to cover all combinations of dimensions and component types 
+                if (match.isArray()) {
+                    if (info.isProperty()) {
+                        String name = info.asProperty().name;
+                        if (name.equals("length")) {
+                            // myArray.length
+                            match.setValues(null, PrimitiveType.INT);
+                            continue;
+                        } else {
+                            // myArray[0], myArray.1
+                            try {
+                                Integer.parseInt(name);
+                                match.setValues(null, match.type().asArrayType().component());
+                                continue;
+                            } catch (NumberFormatException e) {
+                                // not an integer index
+                            }
+                        }
+                    } else if (info.isVirtualMethod() && info.asVirtualMethod().name.equals("get")) {
+                        // array.get(84)
+                        List<Expression> params = info.asVirtualMethod().part.asVirtualMethod().getParameters();
+                        if (params.size() == 1) {
+                            Expression param = params.get(0);
+                            Object literalValue;
+                            try {
+                                literalValue = param.getLiteralValue().get();
+                            } catch (InterruptedException | ExecutionException e) {
+                                literalValue = null;
+                            }
+                            if (literalValue == null || literalValue instanceof Integer) {
+                                match.setValues(null, match.type().asArrayType().component());
+                                continue;
+                            }
+                        }
                     }
                 }
-                // Java member not found - try extension methods
+
+                AnnotationTarget member = null;
+
+                if (!match.isPrimitive()) {
+                    Set<String> membersUsed = implicitClassToMembersUsed.get(match.type().name());
+                    if (membersUsed == null) {
+                        membersUsed = new HashSet<>();
+                        implicitClassToMembersUsed.put(match.type().name(), membersUsed);
+                    }
+                    // First try to find a java member
+                    if (match.clazz() != null) {
+                        if (info.isVirtualMethod()) {
+                            member = findMethod(info.part.asVirtualMethod(), match.clazz(), expression, index,
+                                    templateIdToPathFun,
+                                    results);
+                            if (member != null) {
+                                membersUsed.add(member.asMethod().name());
+                            }
+                        } else if (info.isProperty()) {
+                            member = findProperty(info.asProperty().name, match.clazz(), index);
+                            if (member != null) {
+                                membersUsed
+                                        .add(member.kind() == Kind.FIELD ? member.asField().name() : member.asMethod().name());
+                            }
+                        }
+                    }
+                }
+
                 if (member == null) {
-                    member = findTemplateExtensionMethod(info, match.clazz, templateExtensionMethods, expression, index,
+                    // Then try to find an etension method
+                    member = findTemplateExtensionMethod(info, match.type(), templateExtensionMethods, expression,
+                            index,
                             templateIdToPathFun, results);
                 }
 
                 if (member == null) {
                     // Test whether the validation should be skipped
-                    TypeCheck check = new TypeCheck(info.isProperty() ? info.asProperty().name : info.asVirtualMethod().name,
-                            match.clazz, info.part.isVirtualMethod() ? info.part.asVirtualMethod().getParameters().size() : -1);
+                    TypeCheck check = new TypeCheck(
+                            info.isProperty() ? info.asProperty().name : info.asVirtualMethod().name,
+                            match.clazz(),
+                            info.part.isVirtualMethod() ? info.part.asVirtualMethod().getParameters().size() : -1);
                     if (isExcluded(check, excludes)) {
                         LOGGER.debugf(
-                                "Expression part [%s] excluded from validation of [%s] against class [%s]",
+                                "Expression part [%s] excluded from validation of [%s] against type [%s]",
                                 info.value,
-                                expression.toOriginalString(), match.clazz);
-                        match.clear();
+                                expression.toOriginalString(), match.type());
+                        match.clearValues();
                         break;
                     }
                 }
@@ -608,24 +703,20 @@ public class QuteProcessor {
                 if (member == null) {
                     // No member found - incorrect expression
                     incorrectExpressions.produce(new IncorrectExpressionBuildItem(expression.toOriginalString(),
-                            info.value, match.clazz.toString(), expression.getOrigin()));
-                    match.clear();
+                            info.value, match.type().toString(), expression.getOrigin()));
+                    match.clearValues();
                     break;
                 } else {
-                    match.type = resolveType(member, match, index);
-                    if (match.type.kind() == Type.Kind.CLASS || match.type.kind() == Type.Kind.PARAMETERIZED_TYPE) {
-                        match.clazz = index.getClassByName(match.type.name());
+                    Type type = resolveType(member, match, index);
+                    ClassInfo clazz = null;
+                    if (type.kind() == Type.Kind.CLASS || type.kind() == Type.Kind.PARAMETERIZED_TYPE) {
+                        clazz = index.getClassByName(type.name());
                     }
-                    if (info.isProperty()) {
-                        String hint = info.asProperty().hint;
-                        if (hint != null) {
-                            // For example a loop section needs to validate the type of an element
-                            processHints(templateAnalysis, hint, match, index, expression, generatedIdsToMatches,
-                                    incorrectExpressions);
-                        }
-                    }
-                    if (match.type != null && match.type.kind() == org.jboss.jandex.Type.Kind.PRIMITIVE) {
-                        break;
+                    match.setValues(clazz, type);
+                    if (info.isProperty() && info.asProperty().hasHints()) {
+                        // For example a loop section needs to validate the type of an element
+                        processHints(templateAnalysis, info.asProperty().hints, match, index, expression, generatedIdsToMatches,
+                                incorrectExpressions);
                     }
                 }
             } else {
@@ -633,7 +724,7 @@ public class QuteProcessor {
                         "No match class available - skip further validation for [%s] in expression [%s] in template [%s] on line %s",
                         info.part, expression.toOriginalString(), expression.getOrigin().getTemplateId(),
                         expression.getOrigin().getLine());
-                match.clear();
+                match.clearValues();
                 break;
             }
         }
@@ -681,7 +772,7 @@ public class QuteProcessor {
                     continue;
                 }
                 if ((namespace == null || namespace.isEmpty()) && method.parameters().isEmpty()) {
-                    // Filter methods with no params for non-namespace extensions
+                    // Filter out methods with no params for non-namespace extensions
                     continue;
                 }
                 if (methods.containsKey(method)) {
@@ -722,15 +813,14 @@ public class QuteProcessor {
             matchRegex = matchRegexValue.asString();
         }
         extensionMethods.produce(new TemplateExtensionMethodBuildItem(method, matchName, matchRegex,
-                namespace.isEmpty() ? index.getClassByName(method.parameters().get(0).name()) : null,
-                priority, namespace));
+                namespace.isEmpty() ? method.parameters().get(0) : null, priority, namespace));
     }
 
     private void validateInjectExpression(TemplateAnalysis templateAnalysis, Expression expression, IndexView index,
             BuildProducer<IncorrectExpressionBuildItem> incorrectExpressions,
             List<TemplateExtensionMethodBuildItem> templateExtensionMethods, List<TypeCheckExcludeBuildItem> excludes,
             Map<String, BeanInfo> namedBeans, Map<Integer, Match> generatedIdsToMatches,
-            Map<ClassInfo, Set<String>> implicitClassToMembersUsed, Function<String, String> templateIdToPathFun) {
+            Map<DotName, Set<String>> implicitClassToMembersUsed, Function<String, String> templateIdToPathFun) {
         Expression.Part firstPart = expression.getParts().get(0);
         if (firstPart.isVirtualMethod()) {
             incorrectExpressions.produce(new IncorrectExpressionBuildItem(expression.toOriginalString(),
@@ -784,7 +874,8 @@ public class QuteProcessor {
             List<ImplicitValueResolverBuildItem> implicitClasses,
             TemplatesAnalysisBuildItem templatesAnalysis,
             BuildProducer<GeneratedValueResolverBuildItem> generatedResolvers,
-            BuildProducer<ReflectiveClassBuildItem> reflectiveClass) {
+            BuildProducer<ReflectiveClassBuildItem> reflectiveClass,
+            List<PanacheEntityClassesBuildItem> panacheEntityClasses) {
 
         IndexView index = beanArchiveIndex.getIndex();
         ClassOutput classOutput = new GeneratedClassGizmoAdaptor(generatedClasses, new Predicate<String>() {
@@ -807,7 +898,25 @@ public class QuteProcessor {
             }
         });
 
-        ValueResolverGenerator.Builder builder = ValueResolverGenerator.builder().setIndex(index).setClassOutput(classOutput);
+        ValueResolverGenerator.Builder builder = ValueResolverGenerator.builder()
+                .setIndex(index).setClassOutput(classOutput);
+
+        if (!panacheEntityClasses.isEmpty()) {
+            Set<String> entityClasses = new HashSet<>();
+            for (PanacheEntityClassesBuildItem panaecheEntityClasses : panacheEntityClasses) {
+                entityClasses.addAll(panaecheEntityClasses.getEntityClasses());
+            }
+            builder.setForceGettersFunction(new Function<ClassInfo, Function<FieldInfo, String>>() {
+                @Override
+                public Function<FieldInfo, String> apply(ClassInfo clazz) {
+                    if (entityClasses.contains(clazz.name().toString())) {
+                        return GETTER_FUN;
+                    }
+                    return null;
+                }
+            });
+        }
+
         Set<DotName> controlled = new HashSet<>();
         Map<DotName, AnnotationInstance> uncontrolled = new HashMap<>();
         for (AnnotationInstance templateData : index.getAnnotations(ValueResolverGenerator.TEMPLATE_DATA)) {
@@ -841,7 +950,7 @@ public class QuteProcessor {
         generatedTypes.addAll(generator.getGeneratedTypes());
 
         ExtensionMethodGenerator extensionMethodGenerator = new ExtensionMethodGenerator(index, classOutput);
-        Map<DotName, List<TemplateExtensionMethodBuildItem>> classToNamespaceExtensions = new HashMap<>();
+        Map<DotName, Map<String, List<TemplateExtensionMethodBuildItem>>> classToNamespaceExtensions = new HashMap<>();
         Map<String, DotName> namespaceToClass = new HashMap<>();
 
         for (TemplateExtensionMethodBuildItem templateExtension : templateExtensionMethods) {
@@ -850,17 +959,23 @@ public class QuteProcessor {
                 DotName declaringClassName = templateExtension.getMethod().declaringClass().name();
                 DotName namespaceClassName = namespaceToClass.get(templateExtension.getNamespace());
                 if (namespaceClassName == null) {
-                    namespaceToClass.put(templateExtension.getNamespace(), declaringClassName);
+                    namespaceToClass.put(templateExtension.getNamespace(), namespaceClassName);
                 } else if (!namespaceClassName.equals(declaringClassName)) {
                     throw new IllegalStateException("Template extension methods that share the namespace "
                             + templateExtension.getNamespace() + " must be declared on the same class; but declared on "
                             + namespaceClassName + " and " + declaringClassName);
                 }
-                List<TemplateExtensionMethodBuildItem> namespaceMethods = classToNamespaceExtensions
+                Map<String, List<TemplateExtensionMethodBuildItem>> namespaceToExtensions = classToNamespaceExtensions
                         .get(declaringClassName);
+                if (namespaceToExtensions == null) {
+                    namespaceToExtensions = new HashMap<>();
+                    classToNamespaceExtensions.put(declaringClassName, namespaceToExtensions);
+                }
+                List<TemplateExtensionMethodBuildItem> namespaceMethods = namespaceToExtensions
+                        .get(templateExtension.getNamespace());
                 if (namespaceMethods == null) {
                     namespaceMethods = new ArrayList<>();
-                    classToNamespaceExtensions.put(declaringClassName, namespaceMethods);
+                    namespaceToExtensions.put(templateExtension.getNamespace(), namespaceMethods);
                 }
                 namespaceMethods.add(templateExtension);
             } else {
@@ -871,15 +986,19 @@ public class QuteProcessor {
         }
 
         // Generate a namespace resolver for extension methods declared on the same class
-        for (Entry<DotName, List<TemplateExtensionMethodBuildItem>> entry : classToNamespaceExtensions.entrySet()) {
-            List<TemplateExtensionMethodBuildItem> methods = entry.getValue();
-            // Methods with higher priority take precedence
-            methods.sort(Comparator.comparingInt(TemplateExtensionMethodBuildItem::getPriority).reversed());
-            try (NamespaceResolverCreator namespaceResolverCreator = extensionMethodGenerator
-                    .createNamespaceResolver(methods.get(0).getMethod().declaringClass(), methods.get(0).getNamespace())) {
-                try (ResolveCreator resolveCreator = namespaceResolverCreator.implementResolve()) {
-                    for (TemplateExtensionMethodBuildItem method : methods) {
-                        resolveCreator.addMethod(method.getMethod(), method.getMatchName(), method.getMatchRegex());
+        for (Entry<DotName, Map<String, List<TemplateExtensionMethodBuildItem>>> entry1 : classToNamespaceExtensions
+                .entrySet()) {
+            Map<String, List<TemplateExtensionMethodBuildItem>> namespaceToMethods = entry1.getValue();
+            for (Entry<String, List<TemplateExtensionMethodBuildItem>> entry2 : namespaceToMethods.entrySet()) {
+                List<TemplateExtensionMethodBuildItem> methods = entry2.getValue();
+                // Methods with higher priority take precedence
+                methods.sort(Comparator.comparingInt(TemplateExtensionMethodBuildItem::getPriority).reversed());
+                try (NamespaceResolverCreator namespaceResolverCreator = extensionMethodGenerator
+                        .createNamespaceResolver(methods.get(0).getMethod().declaringClass(), entry2.getKey())) {
+                    try (ResolveCreator resolveCreator = namespaceResolverCreator.implementResolve()) {
+                        for (TemplateExtensionMethodBuildItem method : methods) {
+                            resolveCreator.addMethod(method.getMethod(), method.getMatchName(), method.getMatchRegex());
+                        }
                     }
                 }
             }
@@ -928,14 +1047,16 @@ public class QuteProcessor {
             }
         }
 
-        for (InjectionPointInfo injectionPoint : validationPhase.getContext().get(BuildExtension.Key.INJECTION_POINTS)) {
-
+        for (InjectionPointInfo injectionPoint : validationPhase.getContext().getInjectionPoints()) {
             if (injectionPoint.getRequiredType().name().equals(Names.TEMPLATE)) {
-
-                AnnotationInstance resourcePath = injectionPoint.getRequiredQualifier(Names.RESOURCE_PATH);
+                AnnotationInstance location = injectionPoint.getRequiredQualifier(Names.LOCATION);
+                if (location == null) {
+                    // Try the deprecated @ResourcePath
+                    location = injectionPoint.getRequiredQualifier(Names.RESOURCE_PATH);
+                }
                 String name;
-                if (resourcePath != null) {
-                    name = resourcePath.value().asString();
+                if (location != null) {
+                    name = location.value().asString();
                 } else if (injectionPoint.hasDefaultedQualifier()) {
                     name = getName(injectionPoint);
                 } else {
@@ -943,8 +1064,9 @@ public class QuteProcessor {
                 }
                 if (name != null) {
                     // For "@Inject Template items" we try to match "items"
-                    // For "@ResourcePath("github/pulls") Template pulls" we try to match "github/pulls"
-                    if (filePaths.stream().noneMatch(path -> path.endsWith(name))) {
+                    // For "@Location("github/pulls") Template pulls" we try to match "github/pulls"
+                    // For "@Location("foo/bar/baz.txt") Template baz" we try to match "foo/bar/baz.txt"
+                    if (!filePaths.contains(name)) {
                         validationErrors.produce(new ValidationErrorBuildItem(
                                 new TemplateException("No template found for " + injectionPoint.getTargetInfo())));
                     }
@@ -976,16 +1098,15 @@ public class QuteProcessor {
     }
 
     @BuildStep
-    void excludeTypeChecks(BuildProducer<TypeCheckExcludeBuildItem> excludes) {
+    void excludeTypeChecks(QuteConfig config, BuildProducer<TypeCheckExcludeBuildItem> excludes) {
         // Exclude all checks that involve built-in value resolvers
-        // TODO: We need a better way to exclude value resolvers that are not template extension methods
         List<String> skipOperators = Arrays.asList("?:", "or", ":", "?", "&&", "||");
-
         excludes.produce(new TypeCheckExcludeBuildItem(new Predicate<TypeCheck>() {
             @Override
             public boolean test(TypeCheck check) {
-                // RawString - these properties can be used on any object
-                if (check.isProperty() && ("raw".equals(check.name) || "safe".equals(check.name))) {
+                // RawString and orEmpty - these properties can be used on any object
+                if (check.isProperty()
+                        && ("raw".equals(check.name) || "safe".equals(check.name) || "orEmpty".equals(check.name))) {
                     return true;
                 }
                 // Elvis, ternary and logical operators
@@ -999,6 +1120,31 @@ public class QuteProcessor {
                 return false;
             }
         }));
+
+        if (config.typeCheckExcludes.isPresent()) {
+            for (String exclude : config.typeCheckExcludes.get()) {
+                //  
+                String[] parts = exclude.split("\\.");
+                if (parts.length < 2) {
+                    // An exclude rule must have at least two parts separated by dot
+                    continue;
+                }
+                String className = Arrays.stream(parts).limit(parts.length - 1).collect(Collectors.joining("."));
+                String propertyName = parts[parts.length - 1];
+                excludes.produce(new TypeCheckExcludeBuildItem(new Predicate<TypeCheck>() {
+                    @Override
+                    public boolean test(TypeCheck check) {
+                        if (!className.equals("*") && !check.clazz.name().toString().equals(className)) {
+                            return false;
+                        }
+                        if (!propertyName.equals("*") && !check.name.equals(propertyName)) {
+                            return false;
+                        }
+                        return true;
+                    }
+                }));
+            }
+        }
     }
 
     @BuildStep
@@ -1030,7 +1176,97 @@ public class QuteProcessor {
                         .map(GeneratedValueResolverBuildItem::getClassName).collect(Collectors.toList()), templates,
                         tags, variants))
                 .done());
-        ;
+    }
+
+    @BuildStep
+    @Record(value = STATIC_INIT, optional = true)
+    DevConsoleRouteBuildItem invokeEndpoint(QuteDevConsoleRecorder recorder) {
+        recorder.setupRenderer();
+        return new DevConsoleRouteBuildItem("preview", "POST", new Handler<RoutingContext>() {
+            @Override
+            public void handle(RoutingContext context) {
+                context.request().setExpectMultipart(true);
+                context.request().endHandler(new Handler<Void>() {
+                    @Override
+                    public void handle(Void ignore) {
+                        MultiMap form = context.request().formAttributes();
+                        String templatePath = form.get("template-path");
+                        String testJsonData = form.get("template-data");
+                        String contentType = null;
+                        String fileName = templatePath;
+                        int slashIdx = fileName.lastIndexOf('/');
+                        if (slashIdx != -1) {
+                            fileName = fileName.substring(slashIdx, fileName.length());
+                        }
+                        int dotIdx = fileName.lastIndexOf('.');
+                        if (dotIdx != -1) {
+                            String suffix = fileName.substring(dotIdx + 1, fileName.length());
+                            if (suffix.equalsIgnoreCase("json")) {
+                                contentType = Variant.APPLICATION_JSON;
+                            } else {
+                                contentType = URLConnection.getFileNameMap().getContentTypeFor(fileName);
+                            }
+                        }
+                        try {
+                            BiFunction<String, Object, String> renderer = DevConsoleManager
+                                    .getGlobal(QuteDevConsoleRecorder.RENDER_HANDLER);
+                            Object testData = Json.decodeValue(testJsonData);
+                            testData = translate(testData); //translate it to JDK types
+                            context.response().setStatusCode(200).putHeader(CONTENT_TYPE, contentType)
+                                    .end(renderer.apply(templatePath, testData));
+                        } catch (DecodeException e) {
+                            context.response().setStatusCode(500).putHeader(CONTENT_TYPE, "text/plain; charset=UTF-8")
+                                    .end("Failed to parse JSON: " + e.getMessage());
+                        } catch (Throwable e) {
+                            context.fail(e);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    @BuildStep
+    QualifierRegistrarBuildItem turnLocationIntoQualifier() {
+        return new QualifierRegistrarBuildItem(new QualifierRegistrar() {
+
+            @Override
+            public Map<DotName, Set<String>> getAdditionalQualifiers() {
+                return Collections.singletonMap(Names.LOCATION, Collections.singleton("value"));
+            }
+        });
+    }
+
+    /**
+     * translates Json types to JDK types
+     *
+     * @param testData
+     * @return
+     */
+    private Object translate(Object testData) {
+        if (testData instanceof JsonArray) {
+            return translate((JsonArray) testData);
+        } else if (testData instanceof JsonObject) {
+            return translate((JsonObject) testData);
+        }
+        return testData;
+    }
+
+    private Object translate(JsonArray testData) {
+        List<Object> ret = new ArrayList<>();
+        for (Object i : testData.getList()) {
+            ret.add(translate(i));
+        }
+        return ret;
+    }
+
+    private Object translate(JsonObject testData) {
+        Map<String, Object> map = new HashMap<>();
+        Map<String, Object> data = testData.getMap();
+        for (String i : testData.fieldNames()) {
+            map.put(i, translate(data.get(i)));
+        }
+        return map;
     }
 
     private static Type resolveType(AnnotationTarget member, Match match, IndexView index) {
@@ -1068,9 +1304,8 @@ public class QuteProcessor {
     }
 
     /**
-     * 
      * @param templateAnalysis
-     * @param helperHint
+     * @param helperHints
      * @param match
      * @param index
      * @param expression
@@ -1078,54 +1313,63 @@ public class QuteProcessor {
      * @param incorrectExpressions
      * @return {@code true} if it is necessary to reset the type info part iterator
      */
-    static boolean processHints(TemplateAnalysis templateAnalysis, String helperHint, Match match, IndexView index,
+    static boolean processHints(TemplateAnalysis templateAnalysis, List<String> helperHints, Match match, IndexView index,
             Expression expression, Map<Integer, Match> generatedIdsToMatches,
             BuildProducer<IncorrectExpressionBuildItem> incorrectExpressions) {
-        if (helperHint == null || helperHint.isEmpty()) {
+        if (helperHints == null || helperHints.isEmpty()) {
             return false;
         }
-        if (helperHint.equals(LoopSectionHelper.Factory.HINT_ELEMENT)) {
-            // Iterable<Item>, Stream<Item> => Item
-            // Map<String,Long> => Entry<String,Long>
-            processLoopElementHint(match, index, expression, incorrectExpressions);
-        } else if (helperHint.startsWith(LoopSectionHelper.Factory.HINT_PREFIX)) {
-            Integer iterableExprId = Integer
-                    .valueOf(helperHint.substring(LoopSectionHelper.Factory.HINT_PREFIX.length(), helperHint.length() - 1));
-            Expression valueExpr = templateAnalysis.findExpression(iterableExprId);
-            if (valueExpr != null) {
-                Match valueExprMatch = generatedIdsToMatches.get(valueExpr.getGeneratedId());
-                if (valueExprMatch != null) {
-                    match.type = valueExprMatch.type;
-                    match.clazz = valueExprMatch.clazz;
+        for (String helperHint : helperHints) {
+            if (helperHint.equals(LoopSectionHelper.Factory.HINT_ELEMENT)) {
+                // Iterable<Item>, Stream<Item> => Item
+                // Map<String,Long> => Entry<String,Long>
+                processLoopElementHint(match, index, expression, incorrectExpressions);
+            } else if (helperHint.startsWith(LoopSectionHelper.Factory.HINT_PREFIX)) {
+                Expression valueExpr = findExpression(helperHint, LoopSectionHelper.Factory.HINT_PREFIX, templateAnalysis);
+                if (valueExpr != null) {
+                    Match valueExprMatch = generatedIdsToMatches.get(valueExpr.getGeneratedId());
+                    if (valueExprMatch != null) {
+                        match.setValues(valueExprMatch.clazz, valueExprMatch.type);
+                    }
                 }
-            }
-        } else if (helperHint.startsWith(WhenSectionHelper.Factory.HINT_PREFIX)) {
-            // If a value expression resolves to an enum we attempt to use the enum type to validate the enum constant  
-            // This basically transforms the type info "ON<when:12345>" into something like "|org.acme.Status|.ON"
-            Integer valueExprId = Integer
-                    .valueOf(helperHint.substring(WhenSectionHelper.Factory.HINT_PREFIX.length(), helperHint.length() - 1));
-            Expression valueExpr = templateAnalysis.findExpression(valueExprId);
-            if (valueExpr != null) {
-                Match valueExprMatch = generatedIdsToMatches.get(valueExpr.getGeneratedId());
-                if (valueExprMatch != null && valueExprMatch.clazz.isEnum()) {
-                    match.type = valueExprMatch.type;
-                    match.clazz = valueExprMatch.clazz;
-                    return true;
+            } else if (helperHint.startsWith(WhenSectionHelper.Factory.HINT_PREFIX)) {
+                // If a value expression resolves to an enum we attempt to use the enum type to validate the enum constant  
+                // This basically transforms the type info "ON<when:12345>" into something like "|org.acme.Status|.ON"
+                Expression valueExpr = findExpression(helperHint, WhenSectionHelper.Factory.HINT_PREFIX, templateAnalysis);
+                if (valueExpr != null) {
+                    Match valueExprMatch = generatedIdsToMatches.get(valueExpr.getGeneratedId());
+                    if (valueExprMatch != null && valueExprMatch.clazz.isEnum()) {
+                        match.setValues(valueExprMatch.clazz, valueExprMatch.type);
+                        return true;
+                    }
+                }
+            } else if (helperHint.startsWith(SetSectionHelper.Factory.HINT_PREFIX)) {
+                Expression valueExpr = findExpression(helperHint, SetSectionHelper.Factory.HINT_PREFIX, templateAnalysis);
+                if (valueExpr != null) {
+                    Match valueExprMatch = generatedIdsToMatches.get(valueExpr.getGeneratedId());
+                    if (valueExprMatch != null) {
+                        match.setValues(valueExprMatch.clazz, valueExprMatch.type);
+                    }
                 }
             }
         }
         return false;
     }
 
+    private static Expression findExpression(String helperHint, String hintPrefix, TemplateAnalysis templateAnalysis) {
+        return templateAnalysis
+                .findExpression(Integer.parseInt(helperHint.substring(hintPrefix.length(), helperHint.length() - 1)));
+    }
+
     static void processLoopElementHint(Match match, IndexView index, Expression expression,
             BuildProducer<IncorrectExpressionBuildItem> incorrectExpressions) {
-        if (match.type.name().equals(DotNames.INTEGER)) {
+        if (match.type().name().equals(DotNames.INTEGER)) {
             return;
         }
         Type matchType = null;
-        if (match.type.kind() == Type.Kind.ARRAY) {
-            matchType = match.type.asArrayType().component();
-        } else if (match.type.kind() == Type.Kind.CLASS || match.type.kind() == Type.Kind.PARAMETERIZED_TYPE) {
+        if (match.isArray()) {
+            matchType = match.type().asArrayType().component();
+        } else if (match.isClass() || match.isParameterizedType()) {
             Set<Type> closure = Types.getTypeClosure(match.clazz, Types.buildResolvedMap(
                     match.getParameterizedTypeArguments(), match.getTypeParameters(), new HashMap<>(), index), index);
             Function<Type, Type> firstParamType = t -> t.asParameterizedType().arguments().get(0);
@@ -1150,26 +1394,12 @@ public class QuteProcessor {
             }
         }
 
-        // Handle CompletionStage specially
-        if (matchType == null && ValueResolverGenerator.hasCompletionStageInTypeClosure(match.clazz, index)) {
-            Set<Type> closure = Types.getTypeClosure(match.clazz, Types.buildResolvedMap(
-                    match.getParameterizedTypeArguments(), match.getTypeParameters(), new HashMap<>(), index), index);
-            Function<Type, Type> firstParamType = t -> t.asParameterizedType().arguments().get(0);
-            // CompletionStage<List<Item>> => List<Item>
-            match.type = extractMatchType(closure, Names.COMPLETION_STAGE, firstParamType);
-            match.clazz = index.getClassByName(match.type.name());
-            processLoopElementHint(match, index, expression, incorrectExpressions);
-            return;
-        }
-
         if (matchType != null) {
-            match.type = matchType;
-            match.clazz = index.getClassByName(match.type.name());
+            match.setValues(index.getClassByName(matchType.name()), matchType);
         } else {
             incorrectExpressions.produce(new IncorrectExpressionBuildItem(expression.toOriginalString(),
                     "Unsupported iterable type found: " + match.type, expression.getOrigin()));
-            match.type = null;
-            match.clazz = null;
+            match.clearValues();
         }
     }
 
@@ -1180,8 +1410,13 @@ public class QuteProcessor {
 
     static class Match {
 
-        ClassInfo clazz;
-        Type type;
+        private final IndexView index;
+        private ClassInfo clazz;
+        private Type type;
+
+        Match(IndexView index) {
+            this.index = index;
+        }
 
         List<Type> getParameterizedTypeArguments() {
             return type.kind() == org.jboss.jandex.Type.Kind.PARAMETERIZED_TYPE ? type.asParameterizedType().arguments()
@@ -1192,17 +1427,63 @@ public class QuteProcessor {
             return clazz.typeParameters();
         }
 
-        void clear() {
+        ClassInfo clazz() {
+            return clazz;
+        }
+
+        Type type() {
+            return type;
+        }
+
+        boolean isPrimitive() {
+            return type != null && type.kind() == org.jboss.jandex.Type.Kind.PRIMITIVE;
+        }
+
+        boolean isArray() {
+            return type != null && type.kind() == org.jboss.jandex.Type.Kind.ARRAY;
+        }
+
+        boolean isParameterizedType() {
+            return type != null && type.kind() == org.jboss.jandex.Type.Kind.PARAMETERIZED_TYPE;
+        }
+
+        boolean isClass() {
+            return type != null && type.kind() == org.jboss.jandex.Type.Kind.CLASS;
+        }
+
+        void setValues(ClassInfo clazz, Type type) {
+            this.clazz = clazz;
+            this.type = type;
+            autoExtractType();
+        }
+
+        void clearValues() {
             clazz = null;
             type = null;
         }
 
         boolean isEmpty() {
-            return clazz == null;
+            // For arrays the class is null 
+            return type == null;
+        }
+
+        void autoExtractType() {
+            boolean hasCompletionStage = ValueResolverGenerator.hasCompletionStageInTypeClosure(clazz, index);
+            boolean hasUni = hasCompletionStage ? false
+                    : ValueResolverGenerator.hasClassInTypeClosure(clazz, Names.UNI, index);
+            if (hasCompletionStage || hasUni) {
+                Set<Type> closure = Types.getTypeClosure(clazz, Types.buildResolvedMap(
+                        getParameterizedTypeArguments(), getTypeParameters(), new HashMap<>(), index), index);
+                Function<Type, Type> firstParamType = t -> t.asParameterizedType().arguments().get(0);
+                // CompletionStage<List<Item>> => List<Item>
+                // Uni<List<String>> => List<String>
+                this.type = extractMatchType(closure, hasCompletionStage ? Names.COMPLETION_STAGE : Names.UNI, firstParamType);
+                this.clazz = index.getClassByName(type.name());
+            }
         }
     }
 
-    private static AnnotationTarget findTemplateExtensionMethod(Info info, ClassInfo matchClass,
+    private static AnnotationTarget findTemplateExtensionMethod(Info info, Type matchType,
             List<TemplateExtensionMethodBuildItem> templateExtensionMethods, Expression expression, IndexView index,
             Function<String, String> templateIdToPathFun, Map<String, Match> results) {
         if (!info.isProperty() && !info.isVirtualMethod()) {
@@ -1214,7 +1495,7 @@ public class QuteProcessor {
                 // Skip namespace extensions
                 continue;
             }
-            if (!Types.isAssignableFrom(extensionMethod.getMatchClass().name(), matchClass.name(), index)) {
+            if (!Types.isAssignableFrom(extensionMethod.getMatchType(), matchType, index)) {
                 // If "Bar extends Foo" then Bar should be matched for the extension method "int get(Foo)"   
                 continue;
             }
@@ -1223,7 +1504,8 @@ public class QuteProcessor {
                 continue;
             }
             List<Type> parameters = extensionMethod.getMethod().parameters();
-            if (parameters.size() > 1 && !info.isVirtualMethod()) {
+            int realParamSize = parameters.size() - (TemplateExtension.ANY.equals(extensionMethod.getMatchName()) ? 2 : 1);
+            if (realParamSize > 0 && !info.isVirtualMethod()) {
                 // If method accepts additional params the info must be a virtual method
                 continue;
             }
@@ -1232,7 +1514,6 @@ public class QuteProcessor {
                 VirtualMethodPart virtualMethod = info.part.asVirtualMethod();
                 boolean isVarArgs = ValueResolverGenerator.isVarArgs(extensionMethod.getMethod());
                 int lastParamIdx = parameters.size() - 1;
-                int realParamSize = parameters.size() - (TemplateExtension.ANY.equals(extensionMethod.getMatchName()) ? 2 : 1);
 
                 if (isVarArgs) {
                     // For varargs methods match the minimal number of params
@@ -1263,8 +1544,8 @@ public class QuteProcessor {
                         } else {
                             paramType = parameters.get(idx);
                         }
-                        if (!Types.isAssignableFrom(result.type,
-                                paramType, index)) {
+                        if (!Types.isAssignableFrom(paramType,
+                                result.type, index)) {
                             matches = false;
                             break;
                         }
@@ -1291,7 +1572,7 @@ public class QuteProcessor {
     /**
      * Attempts to find a property with the specified name, ie. a public non-static non-synthetic field with the given name or a
      * public non-static non-synthetic method with no params and the given name.
-     * 
+     *
      * @param name
      * @param clazz
      * @param index
@@ -1333,7 +1614,7 @@ public class QuteProcessor {
 
     /**
      * Find a non-static non-synthetic method with the given name, matching number of params and assignable parameter types.
-     * 
+     *
      * @param virtualMethod
      * @param clazz
      * @param expression
@@ -1380,8 +1661,8 @@ public class QuteProcessor {
                             } else {
                                 paramType = parameters.get(idx);
                             }
-                            if (!Types.isAssignableFrom(result.type,
-                                    paramType, index)) {
+                            if (!Types.isAssignableFrom(paramType,
+                                    result.type, index)) {
                                 matches = false;
                                 break;
                             }

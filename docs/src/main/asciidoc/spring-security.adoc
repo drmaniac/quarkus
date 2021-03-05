@@ -45,7 +45,7 @@ mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectArtifactId=spring-security-quickstart \
     -DclassName="org.acme.spring.security.GreetingController" \
     -Dpath="/greeting" \
-    -Dextensions="spring-web, spring-security, quarkus-elytron-security-properties-file"
+    -Dextensions="spring-web,spring-security,quarkus-elytron-security-properties-file"
 cd spring-security-quickstart
 ----
 
@@ -56,7 +56,7 @@ to your project by running the following command in your project base directory:
 
 [source,bash]
 ----
-./mvnw quarkus:add-extension -Dextensions="spring-web, spring-security, quarkus-elytron-security-properties-file"
+./mvnw quarkus:add-extension -Dextensions="spring-web,spring-security,quarkus-elytron-security-properties-file"
 ----
 
 This will add the following to your `pom.xml`:
@@ -401,7 +401,7 @@ Some examples of allowed expressions are:
 
     @PreAuthorize("hasAnyRole('view1', 'view2') OR isAnonymous() OR hasRole('test')")
     public void allowedForAdminOrAnonymous() {
-        
+
     }
 ----
 
@@ -434,6 +434,7 @@ Quarkus has more Spring compatibility features. See the following guides for mor
 * link:spring-di[Quarkus - Extension for Spring DI]
 * link:spring-web[Quarkus - Extension for Spring Web]
 * link:spring-data-jpa[Quarkus - Extension for Spring Data JPA]
+* link:spring-data-rest[Quarkus - Extension for Spring Data REST]
 * link:spring-cloud-config-client[Quarkus - Reading properties from Spring Cloud Config Server]
 * link:spring-boot-properties[Quarkus - Extension for Spring Boot properties]
 * link:spring-cache[Quarkus - Extension for Spring Cache]

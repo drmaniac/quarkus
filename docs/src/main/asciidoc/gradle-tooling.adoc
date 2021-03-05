@@ -9,7 +9,7 @@ include::./attributes.adoc[]
 
 CAUTION: Quarkus Gradle support is considered preview.
 You can use Gradle to create Quarkus projects as outlined in our guides. If you go beyond there will be cases where
-the Gradle tasks https://github.com/quarkusio/quarkus/issues/5101[does not behave as expected].
+the Gradle tasks https://github.com/quarkusio/quarkus/issues/10189[does not behave as expected].
 This is just a caution, and we recommend if you like Gradle you try it out and give us feedback.
 
 [[project-creation]]
@@ -24,7 +24,7 @@ mvn io.quarkus:quarkus-maven-plugin:{quarkus-version}:create \
     -DprojectArtifactId=my-artifactId \
     -DprojectVersion=my-version \
     -DclassName="org.my.group.MyResource" \
-    -Dextensions="resteasy-jackson" \
+    -Dextensions="resteasy,resteasy-jackson" \
     -DbuildTool=gradle
 ----
 
@@ -55,7 +55,7 @@ The following table lists the attributes you can pass to the `create` command:
 | The artifact id of the created project. Not passing it triggers the interactive mode.
 
 | `projectVersion`
-| `1.0-SNAPSHOT`
+| `1.0.0-SNAPSHOT`
 | The version of the created project
 
 | `className`
@@ -197,6 +197,25 @@ quarkusDev {
 By default, the `quarkusDev` task uses `compileJava` compiler options. These can be overridden by setting the `compilerArgs` property in the task.
 ====
 
+[NOTE]
+====
+By default, `quarkusDev` sets the debug host to `localhost` (for security reasons). If you need to change this, for example to enable debugging on all hosts, you can use the `-DdebugHost` option like so:
+
+[source,bash]
+----
+./gradlew quarkusDev -DdebugHost=0.0.0.0
+----
+====
+The plugin also exposes a `quarkusDev` configuration. Using this configuration to declare a dependency will restrict the usage of that dependency to development mode.
+The `quarkusDev` configuration can be used as following:
+
+[source,groovy]
+----
+dependencies {
+    quarkusDev 'io.quarkus:quarkus-jdbc-h2'
+}
+----
+
 === Remote Development Mode
 
 It is possible to use development mode remotely, so that you can run Quarkus in a container environment (such as OpenShift)
@@ -206,14 +225,7 @@ This allows you to develop in the same environment you will actually run your ap
 
 WARNING: Do not use this in production. This should only be used in a development environment. You should not run production applications in dev mode.
 
-To do this you must have the `quarkus-undertow-websockets` extension installed:
-
-[source,bash]
-----
-./gradlew addExtension --extensions="undertow-websockets"
-----
-
-You must also have the following config properties set:
+You must have the following config properties set:
 
 - `quarkus.live-reload.password`
 - `quarkus.live-reload.url`
@@ -230,6 +242,10 @@ Start Quarkus in dev mode on the remote host. Now you need to connect your local
 
 Now every time you refresh the browser you should see any changes you have made locally immediately visible in the remote
 app.
+
+All the config options are shown below:
+
+include::{generated-dir}/config/quarkus-live-reload-live-reload-config.adoc[opts=optional, leveloffset=+1]
 
 == Debugging
 
@@ -381,20 +397,48 @@ Run the native tests using:
 
 This task depends on `quarkusBuild`, so it will generate the native image before running the tests.
 
+[NOTE]
+====
+By default, the `native-test` source set is based on `main` and `test` source sets. It is possible to add an extra source set. For example, if your integration tests are located in an `integrationTest` source set, you can specify it as:
+
+[source,groovy]
+----
+quarkus {
+    sourceSets {
+        extraNativeTest = sourceSets.integrationTest
+    }
+}
+----
+
+====
+
+== Using fast-jar
+
+`fast-jar` is now the default quarkus package type. The result of `./gradlew build` command is a new directory under `build` named `quarkus-app`.
+
+You can run the application using: `java -jar target/quarkus-app/quarkus-run.jar`.
+
+WARNING: In order to successfully run the produced jar, you need to have the entire contents of the `quarkus-app` directory. If any of the files are missing, the application will not start or
+might not function correctly.
+
+TIP: The `fast-jar` packaging results in creating an artifact that starts a little faster and consumes slightly less memory than a legacy Quarkus jar
+because it has indexed information about which dependency jar contains classes and resources. It can thus avoid the lookup into potentially every jar
+on the classpath that the legacy jar necessitates, when loading a class or resource.
+
 == Building Uber-Jars
 
-Quarkus Gradle plugin supports the generation of Uber-Jars by specifying an `--uber-jar` argument as follows:
+Quarkus Gradle plugin supports the generation of Uber-Jars by specifying a `quarkus.package.type` argument as follows:
 
 [source,bash]
 ----
-./gradlew quarkusBuild --uber-jar
+./gradlew quarkusBuild -Dquarkus.package.type=uber-jar
 ----
 
 When building an Uber-Jar you can specify entries that you want to exclude from the generated jar by using the `--ignored-entry` argument:
 
 [source,bash]
 ----
-./gradlew quarkusBuild --uber-jar --ignored-entry=META-INF/file1.txt
+./gradlew quarkusBuild -Dquarkus.package.type=uber-jar --ignored-entry=META-INF/file1.txt
 ----
 
 The entries are relative to the root of the generated Uber-Jar. You can specify multiple entries by adding extra `--ignored-entry` arguments.
@@ -407,7 +451,7 @@ By default, Quarkus will not discover CDI beans inside another module.
 The best way to enable CDI bean discovery for a module in a multi-module project would be to include a `META-INF/beans.xml` file,
 unless it is the main application module already configured with the quarkus-maven-plugin, in which case it will indexed automatically.
 
-Alternatively, there is some unofficial link:https://plugins.gradle.org/search?term=jandex[Gradle Jandex plugins]) that can be used instead of the `META-INF/beans.xml` file.
+Alternatively, there is some unofficial link:https://plugins.gradle.org/search?term=jandex[Gradle Jandex plugins] that can be used instead of the `META-INF/beans.xml` file.
 
 More information on this topic can be found on the link:cdi-reference#bean_discovery[Bean Discovery] section of the CDI guide.
 

@@ -21,7 +21,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -42,12 +41,14 @@ import org.apache.maven.plugin.BuildPluginManager;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugin.descriptor.MojoDescriptor;
+import org.apache.maven.plugin.logging.Log;
 import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.plugins.annotations.ResolutionScope;
 import org.apache.maven.project.MavenProject;
+import org.apache.maven.shared.utils.cli.CommandLineUtils;
 import org.apache.maven.toolchain.Toolchain;
 import org.apache.maven.toolchain.ToolchainManager;
 import org.codehaus.plexus.util.xml.Xpp3Dom;
@@ -55,9 +56,6 @@ import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.collection.CollectRequest;
-import org.eclipse.aether.collection.DependencyCollectionException;
-import org.eclipse.aether.graph.DependencyNode;
-import org.eclipse.aether.graph.DependencyVisitor;
 import org.eclipse.aether.repository.RemoteRepository;
 import org.eclipse.aether.repository.WorkspaceReader;
 import org.eclipse.aether.resolution.ArtifactRequest;
@@ -68,14 +66,15 @@ import org.eclipse.aether.resolution.DependencyResolutionException;
 import org.eclipse.aether.resolution.DependencyResult;
 import org.eclipse.aether.util.artifact.JavaScopes;
 
+import io.quarkus.bootstrap.devmode.DependenciesFilter;
 import io.quarkus.bootstrap.model.AppArtifactKey;
 import io.quarkus.bootstrap.model.AppModel;
 import io.quarkus.bootstrap.resolver.maven.options.BootstrapMavenOptions;
 import io.quarkus.bootstrap.resolver.maven.workspace.LocalProject;
-import io.quarkus.bootstrap.resolver.maven.workspace.LocalWorkspace;
 import io.quarkus.deployment.dev.DevModeContext;
 import io.quarkus.deployment.dev.DevModeMain;
 import io.quarkus.deployment.dev.QuarkusDevModeLauncher;
+import io.quarkus.maven.MavenDevModeLauncher.Builder;
 import io.quarkus.maven.components.MavenVersionEnforcer;
 import io.quarkus.maven.utilities.MojoUtils;
 
@@ -188,7 +187,7 @@ public class DevMojo extends AbstractMojo {
     @Parameter(defaultValue = "${suspend}")
     private String suspend;
 
-    @Parameter(defaultValue = "localhost")
+    @Parameter(defaultValue = "${debugHost}")
     private String debugHost;
 
     @Parameter(defaultValue = "${project.build.directory}")
@@ -205,6 +204,12 @@ public class DevMojo extends AbstractMojo {
 
     @Parameter(defaultValue = "${quarkus.args}")
     private String argsString;
+
+    @Parameter
+    private Map<String, String> environmentVariables = Collections.emptyMap();
+
+    @Parameter
+    private Map<String, String> systemProperties = Collections.emptyMap();
 
     @Parameter(defaultValue = "${session}")
     private MavenSession session;
@@ -278,6 +283,12 @@ public class DevMojo extends AbstractMojo {
     private ToolchainManager toolchainManager;
 
     @Override
+    public void setLog(Log log) {
+        super.setLog(log);
+        MojoLogger.delegate = log;
+    }
+
+    @Override
     public void execute() throws MojoFailureException, MojoExecutionException {
 
         mavenVersionEnforcer.ensureMavenVersion(getLog(), session);
@@ -296,11 +307,6 @@ public class DevMojo extends AbstractMojo {
                         " on this project make sure the quarkus-maven-plugin is configured with a build goal.");
                 return;
             }
-        }
-
-        // don't warn if running in a module of a multi-module project
-        if (!sourceDir.isDirectory() && (project.getParentFile() == null || !project.getParentFile().exists())) {
-            getLog().warn("The project's sources directory does not exist " + sourceDir);
         }
 
         try {
@@ -411,7 +417,7 @@ public class DevMojo extends AbstractMojo {
 
     private void executeIfConfigured(String pluginGroupId, String pluginArtifactId, String goal) throws MojoExecutionException {
         final Plugin plugin = project.getPlugin(pluginGroupId + ":" + pluginArtifactId);
-        if (plugin == null) {
+        if (plugin == null || plugin.getExecutions().stream().noneMatch(exec -> exec.getGoals().contains(goal))) {
             return;
         }
         executeMojo(
@@ -575,11 +581,14 @@ public class DevMojo extends AbstractMojo {
             if (getLog().isDebugEnabled()) {
                 getLog().debug("Launching JVM with command line: " + String.join(" ", launcher.args()));
             }
-            process = new ProcessBuilder(launcher.args())
+            final ProcessBuilder processBuilder = new ProcessBuilder(launcher.args())
                     .redirectErrorStream(true)
                     .inheritIO()
-                    .directory(workingDir == null ? buildDir : workingDir)
-                    .start();
+                    .directory(workingDir == null ? buildDir : workingDir);
+            if (!environmentVariables.isEmpty()) {
+                processBuilder.environment().putAll(environmentVariables);
+            }
+            process = processBuilder.start();
 
             //https://github.com/quarkusio/quarkus/issues/232
             Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
@@ -622,9 +631,7 @@ public class DevMojo extends AbstractMojo {
                 .debugPortOk(debugPortOk)
                 .deleteDevJar(deleteDevJar);
 
-        if (jvmArgs != null) {
-            builder.jvmArgs(jvmArgs);
-        }
+        setJvmArgs(builder);
 
         builder.projectDir(project.getFile().getParentFile());
         builder.buildSystemProperties((Map) project.getProperties());
@@ -681,7 +688,8 @@ public class DevMojo extends AbstractMojo {
             builder.localArtifact(new AppArtifactKey(localProject.getGroupId(), localProject.getArtifactId(), null, "jar"));
         } else {
             final LocalProject localProject = LocalProject.loadWorkspace(project.getModel().getPomFile().toPath());
-            for (LocalProject project : filterExtensionDependencies(localProject)) {
+            for (LocalProject project : DependenciesFilter.filterNotReloadableDependencies(localProject,
+                    this.project.getArtifacts(), repoSystem, repoSession, repos)) {
                 addProject(builder, project, project == localProject);
                 builder.watchedBuildFile(project.getRawModel().getPomFile().toPath());
                 builder.localArtifact(new AppArtifactKey(project.getGroupId(), project.getArtifactId(), null, "jar"));
@@ -735,6 +743,24 @@ public class DevMojo extends AbstractMojo {
         propagateUserProperties(builder);
 
         return builder.build();
+    }
+
+    private void setJvmArgs(Builder builder) throws Exception {
+        String jvmArgs = this.jvmArgs;
+        if (!systemProperties.isEmpty()) {
+            final StringBuilder buf = new StringBuilder();
+            if (jvmArgs != null) {
+                buf.append(jvmArgs);
+            }
+            for (Map.Entry<String, String> prop : systemProperties.entrySet()) {
+                buf.append(" -D").append(prop.getKey()).append("=\"").append(prop.getValue()).append("\"");
+            }
+            jvmArgs = buf.toString();
+        }
+        if (jvmArgs != null) {
+            builder.jvmArgs(Arrays.asList(CommandLineUtils.translateCommandline(jvmArgs)));
+        }
+
     }
 
     private void propagateUserProperties(MavenDevModeLauncher.Builder builder) {
@@ -853,84 +879,6 @@ public class DevMojo extends AbstractMojo {
 
     protected void modifyDevModeContext(MavenDevModeLauncher.Builder builder) {
 
-    }
-
-    private List<LocalProject> filterExtensionDependencies(LocalProject localProject) {
-        final LocalWorkspace workspace = localProject.getWorkspace();
-        if (workspace == null) {
-            return Collections.singletonList(localProject);
-        }
-
-        List<LocalProject> ret = new ArrayList<>();
-        Set<AppArtifactKey> extensionsAndDeps = new HashSet<>();
-
-        ret.add(localProject);
-        for (Artifact a : project.getArtifacts()) {
-            final AppArtifactKey depKey = new AppArtifactKey(a.getGroupId(), a.getArtifactId());
-            final LocalProject project = workspace.getProject(depKey);
-            if (project == null) {
-                continue;
-            }
-            if (!project.getVersion().equals(a.getVersion())) {
-                getLog().warn(depKey + " is excluded from live coding since the application depends on version "
-                        + a.getVersion() + " while the version present in the workspace is " + project.getVersion());
-                continue;
-            }
-            if (project.getClassesDir() != null &&
-            //if this project also contains Quarkus extensions we do no want to include these in the discovery
-            //a bit of an edge case, but if you try and include a sample project with your extension you will
-            //run into problems without this
-                    (Files.exists(project.getClassesDir().resolve("META-INF/quarkus-extension.properties")) ||
-                            Files.exists(project.getClassesDir().resolve("META-INF/quarkus-build-steps.list")))) {
-                // TODO add the deployment deps
-                extensionDepWarning(depKey);
-                try {
-                    final DependencyNode depRoot = repoSystem.collectDependencies(repoSession, new CollectRequest()
-                            .setRoot(new org.eclipse.aether.graph.Dependency(
-                                    new DefaultArtifact(a.getGroupId(), a.getArtifactId(),
-                                            a.getClassifier(), a.getArtifactHandler().getExtension(), a.getVersion()),
-                                    JavaScopes.RUNTIME))
-                            .setRepositories(repos)).getRoot();
-                    depRoot.accept(new DependencyVisitor() {
-                        @Override
-                        public boolean visitEnter(DependencyNode node) {
-                            final org.eclipse.aether.artifact.Artifact artifact = node.getArtifact();
-                            if ("jar".equals(artifact.getExtension())) {
-                                extensionsAndDeps.add(new AppArtifactKey(artifact.getGroupId(), artifact.getArtifactId()));
-                            }
-                            return true;
-                        }
-
-                        @Override
-                        public boolean visitLeave(DependencyNode node) {
-                            return true;
-                        }
-                    });
-                } catch (DependencyCollectionException e) {
-                    throw new RuntimeException("Failed to collect dependencies for " + a, e);
-                }
-            } else {
-                ret.add(project);
-            }
-        }
-
-        if (extensionsAndDeps.isEmpty()) {
-            return ret;
-        }
-
-        Iterator<LocalProject> iterator = ret.iterator();
-        while (iterator.hasNext()) {
-            final LocalProject localDep = iterator.next();
-            if (extensionsAndDeps.contains(localDep.getKey())) {
-                extensionDepWarning(localDep.getKey());
-                iterator.remove();
-            }
-        }
-        return ret;
-    }
-
-    private void extensionDepWarning(AppArtifactKey key) {
-        getLog().warn("Local Quarkus extension dependency " + key + " will not be hot-reloadable");
     }
 
     private Optional<Xpp3Dom> findCompilerPluginConfiguration() {

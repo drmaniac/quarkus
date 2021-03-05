@@ -45,7 +45,7 @@
         {
             "category": "Data4",
             "timeout": 55,
-            "test-modules": "mongodb-client mongodb-panache redis-client neo4j hibernate-orm-rest-data-panache"
+            "test-modules": "mongodb-client mongodb-panache mongodb-rest-data-panache mongodb-panache-kotlin redis-client neo4j hibernate-orm-rest-data-panache"
         },
         {
             "category": "Data5",
@@ -64,18 +64,18 @@
         },
         {
             "category": "Messaging",
-            "timeout": 85,
-            "test-modules": "artemis-core artemis-jms kafka kafka-streams reactive-messaging-amqp reactive-messaging-kafka reactive-messaging-http"
+            "timeout": 120,
+            "test-modules": "artemis-core artemis-jms kafka kafka-avro kafka-snappy kafka-streams reactive-messaging-amqp reactive-messaging-kafka reactive-messaging-http"
         },
         {
             "category": "Security1",
             "timeout": 50,
-            "test-modules": "elytron-security-oauth2 elytron-security elytron-security-jdbc elytron-undertow elytron-security-ldap"
+            "test-modules": "elytron-security-oauth2 elytron-security elytron-security-jdbc elytron-undertow elytron-security-ldap bouncycastle bouncycastle-jsse bouncycastle-fips"
         },
         {
             "category": "Security2",
             "timeout": 70,
-            "test-modules": "oidc oidc-code-flow oidc-tenancy keycloak-authorization oidc-wiremock"
+            "test-modules": "oidc oidc-code-flow oidc-tenancy keycloak-authorization oidc-client oidc-token-propagation oidc-wiremock oidc-client-wiremock"
         },
         {
             "category": "Security3",
@@ -95,12 +95,12 @@
         {
             "category": "Misc1",
             "timeout": 65,
-            "test-modules": "maven jackson jsonb jsch jgit quartz qute consul-config"
+            "test-modules": "maven jackson jsonb jsch jgit quartz qute consul-config logging-min-level-unset logging-min-level-set"
         },
         {
             "category": "Misc2",
             "timeout": 65,
-            "test-modules": "tika hibernate-validator test-extension logging-gelf bootstrap-config mailer"
+            "test-modules": "tika hibernate-validator test-extension logging-gelf bootstrap-config mailer native-config-profile"
         },
         {
             "category": "Misc3",
@@ -110,17 +110,17 @@
         {
             "category": "Misc4",
             "timeout": 65,
-            "test-modules": "smallrye-config smallrye-graphql picocli-native gradle micrometer-mp-metrics micrometer-native micrometer-prometheus smallrye-metrics logging-json jaxp"
+            "test-modules": "smallrye-config smallrye-graphql picocli-native gradle micrometer-mp-metrics micrometer-prometheus smallrye-metrics logging-json jaxp"
         },
         {
             "category": "Spring",
-            "timeout": 50,
-            "test-modules": "spring-di spring-web spring-data-jpa spring-boot-properties spring-cloud-config-client"
+            "timeout": 55,
+            "test-modules": "spring-di spring-web spring-data-jpa spring-boot-properties spring-cloud-config-client spring-data-rest"
         },
         {
             "category": "gRPC",
             "timeout": 65,
-            "test-modules": "grpc-health grpc-interceptors grpc-mutual-auth grpc-plain-text grpc-plain-text-mutiny grpc-proto-v2 grpc-streaming grpc-tls"
+            "test-modules": "grpc-health grpc-interceptors grpc-mutual-auth grpc-plain-text-gzip grpc-plain-text-mutiny grpc-proto-v2 grpc-streaming grpc-tls"
         }
     ]
 }

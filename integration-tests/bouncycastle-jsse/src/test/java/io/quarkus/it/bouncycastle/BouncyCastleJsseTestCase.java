@@ -29,7 +29,7 @@ import io.restassured.specification.RequestSpecification;
 @QuarkusTest
 public class BouncyCastleJsseTestCase {
 
-    private static final Logger LOG = Logger.getLogger(BouncyCastleJsseTestCase.class);
+    static final Logger LOG = Logger.getLogger(BouncyCastleJsseTestCase.class);
 
     @TestHTTPResource(ssl = true)
     URL url;
@@ -40,6 +40,11 @@ public class BouncyCastleJsseTestCase {
             LOG.trace("Skipping BouncyCastleJsseITCase, Java version is older than 11");
             return;
         }
+        doTestListProviders();
+        checkLog(false);
+    }
+
+    protected void doTestListProviders() {
         RequestSpecification spec = new RequestSpecBuilder()
                 .setBaseUri(String.format("%s://%s", url.getProtocol(), url.getHost()))
                 .setPort(url.getPort())
@@ -53,35 +58,40 @@ public class BouncyCastleJsseTestCase {
                 .then()
                 .statusCode(200)
                 .body(containsString("BC,BCJSSE,SunJSSE"));
-        checkLog();
     }
 
-    private void checkLog() {
+    protected void checkLog(boolean serverOnly) {
         final Path logDirectory = Paths.get(".", "target");
         given().pollInterval(100, TimeUnit.MILLISECONDS)
                 .atMost(10, TimeUnit.SECONDS)
                 .untilAsserted(new ThrowingRunnable() {
                     @Override
                     public void run() throws Throwable {
-                        final Path accessLogFilePath = logDirectory.resolve("quarkus.log");
-                        Assertions.assertTrue(Files.exists(accessLogFilePath),
-                                "access log file " + accessLogFilePath + " is missing");
+                        Path accessLogFilePath = logDirectory.resolve("quarkus.log");
+                        boolean fileExists = Files.exists(accessLogFilePath);
+                        if (!fileExists) {
+                            accessLogFilePath = logDirectory.resolve("target/quarkus.log");
+                            fileExists = Files.exists(accessLogFilePath);
+                        }
+                        Assertions.assertTrue(fileExists, "access log file " + accessLogFilePath + " is missing");
 
-                        boolean checkClientPassed = false;
+                        boolean checkClientPassed = serverOnly;
                         boolean checkServerPassed = false;
 
+                        StringBuilder sbLog = new StringBuilder();
                         try (BufferedReader reader = new BufferedReader(
                                 new InputStreamReader(new ByteArrayInputStream(Files.readAllBytes(accessLogFilePath)),
                                         StandardCharsets.UTF_8))) {
                             String line = null;
                             while ((line = reader.readLine()) != null) {
+                                sbLog.append(line).append("/r/n");
                                 if (!checkServerPassed && line.contains("ProvTlsServer")
-                                        && line.equals(
-                                                "org.bouncycastle.jsse.provider.ProvTlsServer - Server selected protocol version: TLSv1.2")) {
+                                        && (line.contains("Server selected protocol version: TLSv1.2")
+                                                || line.contains("Server selected protocol version: TLSv1.3"))) {
                                     checkServerPassed = true;
-                                } else if (!checkClientPassed
-                                        && line.equals(
-                                                "org.bouncycastle.jsse.provider.ProvTlsClient - Client notified of selected protocol version: TLSv1.2")) {
+                                } else if (!checkClientPassed && line.contains("ProvTlsClient")
+                                        && (line.contains("Client notified of selected protocol version: TLSv1.2")
+                                                || line.contains("Client notified of selected protocol version: TLSv1.3"))) {
                                     checkClientPassed = true;
                                 }
                                 if (checkClientPassed && checkServerPassed) {
@@ -89,8 +99,10 @@ public class BouncyCastleJsseTestCase {
                                 }
                             }
                         }
-                        assertTrue(checkClientPassed, "Log file doesn't contain BouncyCastle JSSE client records");
-                        assertTrue(checkServerPassed, "Log file doesn't contain BouncyCastle JSSE server records");
+                        assertTrue(checkClientPassed,
+                                "Log file doesn't contain BouncyCastle JSSE client records, log: " + sbLog.toString());
+                        assertTrue(checkServerPassed,
+                                "Log file doesn't contain BouncyCastle JSSE server records, log: " + sbLog.toString());
                     }
                 });
     }

@@ -251,7 +251,7 @@ Then run it:
 
 [source,bash]
 ----
-java -jar ./target/security-openid-connect-quickstart-runner.jar
+java -jar target/quarkus-app/quarkus-run.jar
 ----
 
 === Running in Native Mode
@@ -400,10 +400,14 @@ For example, here is how you can use `keycloak.js` to authenticate the users and
 </html>
 ----
 
+== Token Propagation
+
+Please see link:security-openid-connect-client#token-propagation[Token Propagation] section about the Bearer access token propagation to the downstream services.
 
 == References
 
 * https://www.keycloak.org/documentation.html[Keycloak Documentation]
 * https://openid.net/connect/[OpenID Connect]
 * https://tools.ietf.org/html/rfc7519[JSON Web Token]
+* link:security-openid-connect-client[Quarkus - Using OpenID Connect and OAuth2 Client and Filters to manage access tokens]
 * link:security[Quarkus Security]

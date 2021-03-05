@@ -35,11 +35,14 @@ import io.grpc.ServerServiceDefinition;
 import io.quarkus.arc.Arc;
 import io.quarkus.grpc.runtime.config.GrpcConfiguration;
 import io.quarkus.grpc.runtime.config.GrpcServerConfiguration;
+import io.quarkus.grpc.runtime.config.GrpcServerNettyConfig;
 import io.quarkus.grpc.runtime.devmode.GrpcHotReplacementInterceptor;
 import io.quarkus.grpc.runtime.devmode.GrpcServerReloader;
 import io.quarkus.grpc.runtime.health.GrpcHealthStorage;
 import io.quarkus.grpc.runtime.reflection.ReflectionService;
 import io.quarkus.grpc.runtime.supports.BlockingServerInterceptor;
+import io.quarkus.grpc.runtime.supports.CompressionInterceptor;
+import io.quarkus.grpc.runtime.supports.RequestScopeHandlerInterceptor;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.RuntimeValue;
 import io.quarkus.runtime.ShutdownContext;
@@ -191,6 +194,14 @@ public class GrpcServerRecorder {
                 });
     }
 
+    private void applyNettySettings(GrpcServerConfiguration configuration, VertxServerBuilder builder) {
+        if (configuration.netty != null) {
+            GrpcServerNettyConfig config = configuration.netty;
+            config.keepAliveTime.ifPresent(duration -> builder.nettyBuilder()
+                    .keepAliveTime(duration.toNanos(), TimeUnit.NANOSECONDS));
+        }
+    }
+
     private void applyTransportSecurityConfig(GrpcServerConfiguration configuration, VertxServerBuilder builder) {
         if (configuration.transportSecurity != null) {
             File cert = configuration.transportSecurity.certificate
@@ -301,25 +312,33 @@ public class GrpcServerRecorder {
 
         applyTransportSecurityConfig(configuration, builder);
 
+        applyNettySettings(configuration, builder);
+
         boolean reflectionServiceEnabled = configuration.enableReflectionService
                 || ProfileManager.getLaunchMode() == LaunchMode.DEVELOPMENT;
         List<GrpcServiceDefinition> toBeRegistered = collectServiceDefinitions(grpcContainer.getServices());
         List<ServerServiceDefinition> definitions = new ArrayList<>();
+
+        CompressionInterceptor compressionInterceptor = null;
+        if (configuration.compression.isPresent()) {
+            compressionInterceptor = new CompressionInterceptor(configuration.compression.get());
+        }
+
         for (GrpcServiceDefinition service : toBeRegistered) {
+            List<ServerInterceptor> interceptors = new ArrayList<>();
+            if (compressionInterceptor != null) {
+                interceptors.add(compressionInterceptor);
+            }
             // We only register the blocking interceptor if needed by at least one method of the service.
-            if (blockingMethodsPerService.isEmpty()) {
-                // Fast track - no usage of @Blocking
-                builder.addService(service.definition);
-            } else {
+            if (!blockingMethodsPerService.isEmpty()) {
                 List<String> list = blockingMethodsPerService.get(service.getImplementationClassName());
-                if (list == null) {
-                    // The service does not contain any methods annotated with @Blocking - no need for the itcp
-                    builder.addService(service.definition);
-                } else {
-                    builder.addService(
-                            ServerInterceptors.intercept(service.definition, new BlockingServerInterceptor(vertx, list)));
+                if (list != null) {
+                    interceptors.add(new BlockingServerInterceptor(vertx, list));
                 }
             }
+            // Order matters! Request scope must be called first (on the event loop) and so should be last in the list...
+            interceptors.add(new RequestScopeHandlerInterceptor());
+            builder.addService(ServerInterceptors.intercept(service.definition, interceptors));
             LOGGER.debugf("Registered gRPC service '%s'", service.definition.getServiceDescriptor().getName());
             definitions.add(service.definition);
         }

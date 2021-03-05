@@ -18,7 +18,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -48,6 +47,7 @@ import org.jboss.resteasy.spi.ResourceInvoker;
 
 import io.quarkus.runtime.TemplateHtmlBuilder;
 import io.quarkus.runtime.util.ClassPathUtils;
+import io.quarkus.vertx.http.runtime.devmode.AdditionalRouteDescription;
 import io.quarkus.vertx.http.runtime.devmode.RouteDescription;
 
 @Provider
@@ -60,11 +60,13 @@ public class NotFoundExceptionMapper implements ExceptionMapper<NotFoundExceptio
     private final static Variant JSON_VARIANT = new Variant(MediaType.APPLICATION_JSON_TYPE, (String) null, null);
     private final static Variant HTML_VARIANT = new Variant(MediaType.TEXT_HTML_TYPE, (String) null, null);
     private final static List<Variant> VARIANTS = Arrays.asList(JSON_VARIANT, HTML_VARIANT);
+    private final static ResourceDescriptionComparator RESOURCE_DESCRIPTION_COMPARATOR = new ResourceDescriptionComparator();
+    private final static MethodDescriptionComparator METHOD_DESCRIPTION_COMPARATOR = new MethodDescriptionComparator();
 
     private volatile static String httpRoot = "";
     private volatile static List<String> servletMappings = Collections.emptyList();
     private volatile static Set<java.nio.file.Path> staticResouceRoots = Collections.emptySet();
-    private volatile static List<String> additionalEndpoints = Collections.emptyList();
+    private volatile static List<AdditionalRouteDescription> additionalEndpoints = Collections.emptyList();
     private volatile static Map<String, NonJaxRsClassMappings> nonJaxRsClassNameToMethodPaths = Collections.emptyMap();
     private volatile static List<RouteDescription> reactiveRoutes = Collections.emptyList();
 
@@ -123,7 +125,7 @@ public class NotFoundExceptionMapper implements ExceptionMapper<NotFoundExceptio
 
         public static List<ResourceDescription> fromBoundResourceInvokers(
                 Set<Map.Entry<String, List<ResourceInvoker>>> bound) {
-            Map<String, ResourceDescription> descriptions = new HashMap<>();
+            Map<String, ResourceDescription> descriptionMap = new HashMap<>();
 
             for (Map.Entry<String, List<ResourceInvoker>> entry : bound) {
                 for (ResourceInvoker invoker : entry.getValue()) {
@@ -150,10 +152,10 @@ public class NotFoundExceptionMapper implements ExceptionMapper<NotFoundExceptio
                         continue;
                     }
 
-                    ResourceDescription description = descriptions.get(basePath);
+                    ResourceDescription description = descriptionMap.get(basePath);
                     if (description == null) {
                         description = new ResourceDescription(basePath);
-                        descriptions.put(basePath, description);
+                        descriptionMap.put(basePath, description);
                     }
 
                     String subPath = "";
@@ -184,7 +186,12 @@ public class NotFoundExceptionMapper implements ExceptionMapper<NotFoundExceptio
                 }
             }
 
-            return new LinkedList<>(descriptions.values());
+            List<ResourceDescription> descriptions = new ArrayList<>(descriptionMap.values());
+            descriptions.sort(RESOURCE_DESCRIPTION_COMPARATOR);
+            for (ResourceDescription description : descriptions) {
+                description.calls.sort(METHOD_DESCRIPTION_COMPARATOR);
+            }
+            return descriptions;
         }
     }
 
@@ -301,8 +308,9 @@ public class NotFoundExceptionMapper implements ExceptionMapper<NotFoundExceptio
 
             if (!additionalEndpoints.isEmpty()) {
                 sb.resourcesStart("Additional endpoints");
-                for (String additionalEndpoint : additionalEndpoints) {
-                    sb.staticResourcePath(adjustRoot(httpRoot, additionalEndpoint));
+                for (AdditionalRouteDescription additionalEndpoint : additionalEndpoints) {
+                    sb.staticResourcePath(additionalEndpoint.getUri(),
+                            additionalEndpoint.getDescription());
                 }
                 sb.resourcesEnd();
             }
@@ -397,11 +405,27 @@ public class NotFoundExceptionMapper implements ExceptionMapper<NotFoundExceptio
         NotFoundExceptionMapper.nonJaxRsClassNameToMethodPaths = nonJaxRsPaths;
     }
 
-    public static void setAdditionalEndpoints(List<String> additionalEndpoints) {
+    public static void setAdditionalEndpoints(List<AdditionalRouteDescription> additionalEndpoints) {
         NotFoundExceptionMapper.additionalEndpoints = additionalEndpoints;
     }
 
     public static void setReactiveRoutes(List<RouteDescription> reactiveRoutes) {
         NotFoundExceptionMapper.reactiveRoutes = reactiveRoutes;
+    }
+
+    private static class ResourceDescriptionComparator implements Comparator<ResourceDescription> {
+        @Override
+        public int compare(
+                NotFoundExceptionMapper.ResourceDescription d1, NotFoundExceptionMapper.ResourceDescription d2) {
+            return d1.basePath.compareTo(d2.basePath);
+        }
+    }
+
+    private static class MethodDescriptionComparator implements Comparator<MethodDescription> {
+        @Override
+        public int compare(MethodDescription m1, MethodDescription m2) {
+            int fullPathComparison = m1.fullPath.compareTo(m2.fullPath);
+            return fullPathComparison == 0 ? m1.method.compareTo(m2.method) : fullPathComparison;
+        }
     }
 }

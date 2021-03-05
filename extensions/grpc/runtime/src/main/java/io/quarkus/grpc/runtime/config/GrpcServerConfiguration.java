@@ -79,4 +79,16 @@ public class GrpcServerConfiguration {
      */
     @ConfigItem(defaultValue = "1")
     public int instances;
+
+    /**
+     * Configures the netty server settings.
+     */
+    @ConfigItem
+    public GrpcServerNettyConfig netty;
+
+    /**
+     * gRPC compression, e.g. "gzip"
+     */
+    @ConfigItem
+    public Optional<String> compression;
 }
