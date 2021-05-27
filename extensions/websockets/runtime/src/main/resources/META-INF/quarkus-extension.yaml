@@ -1,5 +1,5 @@
----
 name: "WebSockets"
+artifact: ${project.groupId}:${project.artifactId}:${project.version}
 metadata:
   short-name: "websockets"
   keywords:
@@ -12,4 +12,8 @@ metadata:
   categories:
   - "web"
   status: "stable"
-  codestart: "undertow-websockets"
+  codestart:
+    name: "undertow-websockets"
+    kind: "example"
+    languages: "java"
+    artifact: "io.quarkus:quarkus-project-core-extension-codestarts"

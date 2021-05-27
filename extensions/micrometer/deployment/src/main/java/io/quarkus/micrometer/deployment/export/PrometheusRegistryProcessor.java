@@ -64,15 +64,13 @@ public class PrometheusRegistryProcessor {
         routes.produce(nonApplicationRootPathBuildItem.routeBuilder()
                 .routeFunction(pConfig.path, recorder.route())
                 .handler(recorder.getHandler())
-                .requiresLegacyRedirect()
-                .displayOnNotFoundPage("Metrics", pConfig.path)
+                .displayOnNotFoundPage("Metrics")
                 .build());
 
         // Match paths that begin with the deployment path
         routes.produce(nonApplicationRootPathBuildItem.routeBuilder()
                 .routeFunction(pConfig.path + (pConfig.path.endsWith("/") ? "*" : "/*"), recorder.route())
                 .handler(recorder.getHandler())
-                .requiresLegacyRedirect()
                 .build());
     }
 }

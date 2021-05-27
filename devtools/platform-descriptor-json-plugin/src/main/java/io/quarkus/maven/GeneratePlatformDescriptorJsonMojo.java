@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -63,8 +64,11 @@ import io.quarkus.registry.catalog.json.JsonExtensionCatalog;
 
 /**
  * This goal generates a platform JSON descriptor for a given platform BOM.
+ * 
+ * @deprecated in favor of <code>io.quarkus:quarkus-platform-bom-maven-plugin:generate-platform-descriptor</code>
  */
-@Mojo(name = "generate-platform-descriptor-json")
+@Deprecated
+@Mojo(name = "generate-platform-descriptor-json", threadSafe = true)
 public class GeneratePlatformDescriptorJsonMojo extends AbstractMojo {
 
     @Parameter(property = "quarkusCoreGroupId", defaultValue = ToolsConstants.QUARKUS_CORE_GROUP_ID)
@@ -107,20 +111,44 @@ public class GeneratePlatformDescriptorJsonMojo extends AbstractMojo {
     private MavenProjectHelper projectHelper;
 
     /**
-     * Group ID's that we know don't contain extensions. This can speed up the process
-     * by preventing the download of artifacts that are not required.
+     * A set of artifact group ID's that should be excluded from of the BOM and the descriptor.
+     * This can speed up the process by preventing the download of artifacts that are not required.
      */
     @Parameter
     private Set<String> ignoredGroupIds = new HashSet<>(0);
 
+    /**
+     * A set of group IDs artifacts of which should be checked to be extensions and if so, included into the
+     * generated descriptor. If this parameter is configured, artifacts with group IDs that aren't found
+     * among the configured set will be ignored. However, this will not prevent extensions that are inherited
+     * from parent platforms with different group IDs to be included into the generated descriptor.
+     */
+    @Parameter
+    private Set<String> processGroupIds = new HashSet<>(1);
+
+    /**
+     * Skips the check for the descriptor's artifactId naming convention
+     */
     @Parameter
     private boolean skipArtifactIdCheck;
 
+    /**
+     * Skips the check for the BOM to contain the generated platform JSON descriptor
+     */
     @Parameter(property = "skipBomCheck")
     private boolean skipBomCheck;
 
+    /**
+     * Skips the check for categories referenced from the extensions to be listed in the generated descriptor
+     */
+    @Parameter(property = "skipCategoryCheck")
+    boolean skipCategoryCheck;
+
     @Parameter(property = "resolveDependencyManagement")
     boolean resolveDependencyManagement;
+
+    @Parameter(required = false)
+    String quarkusCoreVersion;
 
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
@@ -211,6 +239,7 @@ public class GeneratePlatformDescriptorJsonMojo extends AbstractMojo {
                 throw new MojoExecutionException("Failed to resolver inherited platform descriptor", e);
             }
             platformJson.setDerivedFrom(baseCatalog.getDerivedFrom());
+            platformJson.setCategories(baseCatalog.getCategories());
 
             final List<Extension> extensions = baseCatalog.getExtensions();
             if (!extensions.isEmpty()) {
@@ -224,13 +253,14 @@ public class GeneratePlatformDescriptorJsonMojo extends AbstractMojo {
         }
 
         // Create a JSON array of extension descriptors
+        final Set<String> referencedCategories = new HashSet<>();
         final List<io.quarkus.registry.catalog.Extension> extListJson = new ArrayList<>();
         platformJson.setExtensions(extListJson);
-        String quarkusCoreVersion = null;
         boolean jsonFoundInBom = false;
         for (Dependency dep : deps) {
             final Artifact artifact = dep.getArtifact();
 
+            // checking whether the descriptor is present in the BOM
             if (!skipBomCheck && !jsonFoundInBom) {
                 jsonFoundInBom = artifact.getArtifactId().equals(jsonArtifact.getArtifactId())
                         && artifact.getGroupId().equals(jsonArtifact.getGroupId())
@@ -239,48 +269,74 @@ public class GeneratePlatformDescriptorJsonMojo extends AbstractMojo {
                         && artifact.getVersion().equals(jsonArtifact.getVersion());
             }
 
-            if (ignoredGroupIds.contains(artifact.getGroupId())
-                    || !artifact.getExtension().equals("jar")
+            // filtering non jar artifacts
+            if (!artifact.getExtension().equals("jar")
                     || "javadoc".equals(artifact.getClassifier())
                     || "tests".equals(artifact.getClassifier())
-                    || "sources".equals(artifact.getClassifier())) {
+                    || "sources".equals(artifact.getClassifier())
+                    || artifact.getArtifactId().endsWith("-deployment")) {
                 continue;
             }
 
-            if (artifact.getArtifactId().equals(quarkusCoreArtifactId)
+            if (processGroupIds.isEmpty()) {
+                if (ignoredGroupIds.contains(artifact.getGroupId())) {
+                    continue;
+                }
+            } else if (!processGroupIds.contains(artifact.getGroupId())) {
+                continue;
+            }
+
+            if (quarkusCoreVersion == null && artifact.getArtifactId().equals(quarkusCoreArtifactId)
                     && artifact.getGroupId().equals(quarkusCoreGroupId)) {
                 quarkusCoreVersion = artifact.getVersion();
             }
             ArtifactResult resolved = null;
+            JsonExtension extension = null;
             try {
                 resolved = repoSystem.resolveArtifact(repoSession,
                         new ArtifactRequest().setRepositories(repos).setArtifact(artifact));
-                JsonExtension extension = processDependency(resolved.getArtifact());
-                if (extension != null) {
-                    Extension inherited = inheritedExtensions.get(extension.getArtifact().getKey());
-                    final List<ExtensionOrigin> origins;
-                    if (inherited != null) {
-                        origins = new ArrayList<>(inherited.getOrigins().size() + 1);
-                        origins.addAll(inherited.getOrigins());
-                        origins.add(platformJson);
-                    } else {
-                        origins = Arrays.asList(platformJson);
-                    }
-                    extension.setOrigins(origins);
-                    String key = extensionId(extension);
-                    for (OverrideInfo info : allOverrides) {
-                        io.quarkus.registry.catalog.Extension extOverride = info.getExtOverrides().get(key);
-                        if (extOverride != null) {
-                            extension = mergeObject(extension, extOverride);
-                        }
-                    }
-                    extListJson.add(extension);
-                }
+                extension = processDependency(resolved.getArtifact());
             } catch (ArtifactResolutionException e) {
                 // there are some parent poms that appear as jars for some reason
                 debug("Failed to resolve dependency %s defined in %s", artifact, bomArtifact);
             } catch (IOException e) {
                 throw new MojoExecutionException("Failed to process dependency " + artifact, e);
+            }
+
+            if (extension == null) {
+                continue;
+            }
+
+            Extension inherited = inheritedExtensions.get(extension.getArtifact().getKey());
+            final List<ExtensionOrigin> origins;
+            if (inherited != null) {
+                origins = new ArrayList<>(inherited.getOrigins().size() + 1);
+                origins.addAll(inherited.getOrigins());
+                origins.add(platformJson);
+            } else {
+                origins = Arrays.asList(platformJson);
+            }
+            extension.setOrigins(origins);
+            String key = extensionId(extension);
+            for (OverrideInfo info : allOverrides) {
+                io.quarkus.registry.catalog.Extension extOverride = info.getExtOverrides().get(key);
+                if (extOverride != null) {
+                    extension = mergeObject(extension, extOverride);
+                }
+            }
+            extListJson.add(extension);
+
+            if (!skipCategoryCheck) {
+                try {
+                    @SuppressWarnings("unchecked")
+                    final Collection<String> extCategories = (Collection<String>) extension.getMetadata()
+                            .get("categories");
+                    if (extCategories != null) {
+                        referencedCategories.addAll(extCategories);
+                    }
+                } catch (ClassCastException e) {
+                    getLog().warn("Failed to cast the extension categories list to java.util.Collection<String>", e);
+                }
             }
         }
 
@@ -336,6 +392,26 @@ public class GeneratePlatformDescriptorJsonMojo extends AbstractMojo {
                 }
             }
         }
+
+        // make sure all the categories referenced by extensions are actually present in
+        // the platform descriptor
+        if (!skipCategoryCheck) {
+            final Set<String> catalogCategories = platformJson.getCategories().stream().map(c -> c.getId())
+                    .collect(Collectors.toSet());
+            if (!catalogCategories.containsAll(referencedCategories)) {
+                final List<String> missing = referencedCategories.stream().filter(c -> !catalogCategories.contains(c))
+                        .collect(Collectors.toList());
+                final StringBuilder buf = new StringBuilder();
+                buf.append(
+                        "The following categories referenced from extensions are missing from the generated catalog: ");
+                buf.append(missing.get(0));
+                for (int i = 1; i < missing.size(); ++i) {
+                    buf.append(", ").append(missing.get(i));
+                }
+                throw new MojoExecutionException(buf.toString());
+            }
+        }
+
         // Write the JSON to the output file
         final File outputDir = outputFile.getParentFile();
         if (outputFile.exists()) {
@@ -435,10 +511,6 @@ public class GeneratePlatformDescriptorJsonMojo extends AbstractMojo {
     }
 
     private JsonExtension processDependency(Artifact artifact) throws IOException {
-        return processDependencyToObjectNode(artifact);
-    }
-
-    private JsonExtension processDependencyToObjectNode(Artifact artifact) throws IOException {
         final Path path = artifact.getFile().toPath();
         if (Files.isDirectory(path)) {
             return processMetaInfDir(artifact, path.resolve(BootstrapConstants.META_INF));
@@ -465,30 +537,28 @@ public class GeneratePlatformDescriptorJsonMojo extends AbstractMojo {
         if (!Files.exists(metaInfDir)) {
             return null;
         }
-        Path jsonOrYaml = null;
 
         Path yaml = metaInfDir.resolve(BootstrapConstants.QUARKUS_EXTENSION_FILE_NAME);
         if (Files.exists(yaml)) {
             mapper = getMapper(true);
-            jsonOrYaml = yaml;
-        } else {
-            mapper = getMapper(false);
-            Path json = metaInfDir.resolve(BootstrapConstants.EXTENSION_PROPS_JSON_FILE_NAME);
-            if (!Files.exists(json)) {
-                final Path props = metaInfDir.resolve(BootstrapConstants.DESCRIPTOR_FILE_NAME);
-                if (Files.exists(props)) {
-                    final JsonExtension e = new JsonExtension();
-                    e.setArtifact(new ArtifactCoords(artifact.getGroupId(), artifact.getArtifactId(), artifact.getClassifier(),
-                            artifact.getExtension(), artifact.getVersion()));
-                    e.setName(artifact.getArtifactId());
-                    return e;
-                }
-                return null;
-            } else {
-                jsonOrYaml = json;
-            }
+            return processPlatformArtifact(artifact, yaml, mapper);
         }
-        return processPlatformArtifact(artifact, jsonOrYaml, mapper);
+
+        JsonExtension e = null;
+        mapper = getMapper(false);
+        Path json = metaInfDir.resolve(BootstrapConstants.EXTENSION_PROPS_JSON_FILE_NAME);
+        if (!Files.exists(json)) {
+            final Path props = metaInfDir.resolve(BootstrapConstants.DESCRIPTOR_FILE_NAME);
+            if (Files.exists(props)) {
+                e = new JsonExtension();
+                e.setArtifact(new ArtifactCoords(artifact.getGroupId(), artifact.getArtifactId(),
+                        artifact.getClassifier(), artifact.getExtension(), artifact.getVersion()));
+                e.setName(artifact.getArtifactId());
+            }
+        } else {
+            e = processPlatformArtifact(artifact, json, mapper);
+        }
+        return e;
     }
 
     private JsonExtension processPlatformArtifact(Artifact artifact, Path descriptor, ObjectMapper mapper)
@@ -521,18 +591,6 @@ public class GeneratePlatformDescriptorJsonMojo extends AbstractMojo {
         if (extOverride.getArtifact() != null) {
             extObject.setArtifact(extOverride.getArtifact());
         }
-        if (extOverride.getCodestart() != null) {
-            extObject.setCodestart(extOverride.getCodestart());
-        }
-        if (extOverride.getDescription() != null) {
-            extObject.setDescription(extOverride.getDescription());
-        }
-        if (extOverride.getGuide() != null) {
-            extObject.setGuide(extOverride.getGuide());
-        }
-        if (!extOverride.getKeywords().isEmpty()) {
-            extObject.setKeywords(extOverride.getKeywords());
-        }
         if (!extOverride.getMetadata().isEmpty()) {
             if (extObject.getMetadata().isEmpty()) {
                 extObject.setMetadata(extOverride.getMetadata());
@@ -545,9 +603,6 @@ public class GeneratePlatformDescriptorJsonMojo extends AbstractMojo {
         }
         if (!extOverride.getOrigins().isEmpty()) {
             extObject.setOrigins(extOverride.getOrigins());
-        }
-        if (extOverride.getShortName() != null) {
-            extObject.setShortName(extOverride.getShortName());
         }
         return extObject;
     }

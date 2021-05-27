@@ -2,10 +2,9 @@ package io.quarkus.platform.descriptor;
 
 import io.quarkus.bootstrap.BootstrapConstants;
 import io.quarkus.bootstrap.model.AppArtifact;
-import io.quarkus.bootstrap.model.AppArtifactCoords;
-import io.quarkus.bootstrap.model.AppArtifactKey;
 import io.quarkus.bootstrap.resolver.AppModelResolver;
 import io.quarkus.bootstrap.resolver.AppModelResolverException;
+import io.quarkus.maven.ArtifactCoords;
 import io.quarkus.maven.ArtifactKey;
 import io.quarkus.registry.catalog.Category;
 import io.quarkus.registry.catalog.Extension;
@@ -27,14 +26,15 @@ public class ProjectPlatformDescriptorJsonUtil {
     public static JsonExtensionCatalog resolveCatalog(AppModelResolver resolver, List<AppArtifact> depConstraints)
             throws AppModelResolverException {
         final List<JsonExtensionCatalog> platforms = new ArrayList<>(2);
-        final Set<AppArtifactKey> processedPlatforms = new HashSet<>();
-        for (int i = depConstraints.size() - 1; i >= 0; --i) {
+        final Set<ArtifactKey> processedPlatforms = new HashSet<>();
+        for (int i = 0; i < depConstraints.size(); ++i) {
             final AppArtifact artifact = depConstraints.get(i);
             if (!artifact.getArtifactId().endsWith(BootstrapConstants.PLATFORM_DESCRIPTOR_ARTIFACT_ID_SUFFIX)
                     && !artifact.getType().equals("json")) {
                 continue;
             }
-            if (!processedPlatforms.add(artifact.getKey())) {
+            if (!processedPlatforms.add(new ArtifactKey(artifact.getGroupId(), artifact.getArtifactId(),
+                    artifact.getClassifier(), artifact.getType()))) {
                 continue;
             }
             final Path json = resolver.resolve(artifact);
@@ -44,7 +44,7 @@ public class ProjectPlatformDescriptorJsonUtil {
             } catch (IOException e) {
                 throw new AppModelResolverException("Failed to deserialize a platform descriptor from " + json, e);
             }
-            platform.getDerivedFrom().forEach(o -> processedPlatforms.add(AppArtifactCoords.fromString(o.getId()).getKey()));
+            platform.getDerivedFrom().forEach(o -> processedPlatforms.add(ArtifactCoords.fromString(o.getId()).getKey()));
             platforms.add(platform);
         }
         if (platforms.isEmpty()) {
@@ -69,7 +69,7 @@ public class ProjectPlatformDescriptorJsonUtil {
         catalog.setQuarkusCoreVersion(dominatingPlatform.getQuarkusCoreVersion());
         catalog.setUpstreamQuarkusCoreVersion(dominatingPlatform.getUpstreamQuarkusCoreVersion());
 
-        for (int i = platforms.size() - 1; i >= 0; --i) {
+        for (int i = 0; i < platforms.size(); ++i) {
             final JsonExtensionCatalog platform = platforms.get(i);
             if (platform.getBom() != null) {
                 catalog.setBom(platform.getBom());
@@ -86,19 +86,15 @@ public class ProjectPlatformDescriptorJsonUtil {
                 }
             }
 
-            if (platform.getCategories().isEmpty()) {
-                for (Category c : platform.getCategories()) {
-                    if (categoryIds.add(c.getId())) {
-                        categories.add(c);
-                    }
+            for (Category c : platform.getCategories()) {
+                if (categoryIds.add(c.getId())) {
+                    categories.add(c);
                 }
             }
 
-            if (!platform.getMetadata().isEmpty()) {
-                for (Map.Entry<String, Object> entry : platform.getMetadata().entrySet()) {
-                    if (!metadata.containsKey(entry.getKey())) {
-                        metadata.put(entry.getKey(), entry.getValue());
-                    }
+            for (Map.Entry<String, Object> entry : platform.getMetadata().entrySet()) {
+                if (!metadata.containsKey(entry.getKey())) {
+                    metadata.put(entry.getKey(), entry.getValue());
                 }
             }
         }

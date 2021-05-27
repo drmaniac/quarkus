@@ -51,6 +51,9 @@ public class TestEndpoint {
     @Path("model")
     @Transactional
     public String testModel() {
+        Person.flush();
+        Assertions.assertNotNull(Person.getEntityManager());
+
         List<Person> persons = Person.findAll().list();
         Assertions.assertEquals(0, persons.size());
 
@@ -528,6 +531,9 @@ public class TestEndpoint {
     @Path("model-dao")
     @Transactional
     public String testModelDao() {
+        personDao.flush();
+        Assertions.assertNotNull(personDao.getEntityManager());
+
         List<Person> persons = personDao.findAll().list();
         Assertions.assertEquals(0, persons.size());
 
@@ -1106,6 +1112,11 @@ public class TestEndpoint {
         Assertions.assertEquals(0, query.list().size());
 
         Assertions.assertEquals(1, Person.findAll().project(PersonName.class).count());
+
+        Person owner = makeSavedPerson();
+        DogDto dogDto = Dog.findAll().project(DogDto.class).firstResult();
+        Assertions.assertEquals("stef", dogDto.ownerName);
+        owner.delete();
 
         return "OK";
     }

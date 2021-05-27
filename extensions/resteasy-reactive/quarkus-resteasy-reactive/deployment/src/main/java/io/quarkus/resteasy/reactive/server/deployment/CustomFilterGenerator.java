@@ -210,6 +210,10 @@ final class CustomFilterGenerator {
                 ResultHandle routingContextHandle = GeneratorUtils.routingContextHandler(filterMethod, rrReqCtxHandle);
                 targetMethodParamHandles[i] = filterMethod.invokeInterfaceMethod(
                         ofMethod(RoutingContext.class, "request", HttpServerRequest.class), routingContextHandle);
+            } else if (HTTP_SERVER_RESPONSE.equals(paramDotName)) {
+                ResultHandle routingContextHandle = GeneratorUtils.routingContextHandler(filterMethod, rrReqCtxHandle);
+                targetMethodParamHandles[i] = filterMethod.invokeInterfaceMethod(
+                        ofMethod(RoutingContext.class, "response", HttpServerResponse.class), routingContextHandle);
             } else if (RESOURCE_INFO.equals(paramDotName)) {
                 targetMethodParamHandles[i] = getResourceInfoHandle(filterMethod, rrReqCtxHandle);
             } else if (SIMPLIFIED_RESOURCE_INFO.equals(paramDotName)) {
@@ -381,7 +385,8 @@ final class CustomFilterGenerator {
         ResultHandle runtimeResourceHandle = GeneratorUtils.runtimeResourceHandle(filterMethod, rrReqCtxHandle);
         AssignableResultHandle resourceInfo = filterMethod.createVariable(ResteasyReactiveResourceInfo.class);
         BranchResult ifNullBranch = filterMethod.ifNull(runtimeResourceHandle);
-        ifNullBranch.trueBranch().assign(resourceInfo, ifNullBranch.trueBranch().loadNull());
+        ifNullBranch.trueBranch().assign(resourceInfo, ifNullBranch.trueBranch().readStaticField(
+                FieldDescriptor.of(SimpleResourceInfo.NullValues.class, "INSTANCE", SimpleResourceInfo.NullValues.class)));
         ifNullBranch.falseBranch().assign(resourceInfo, ifNullBranch.falseBranch().invokeVirtualMethod(
                 ofMethod(RuntimeResource.class, "getLazyMethod", ResteasyReactiveResourceInfo.class),
                 runtimeResourceHandle));
@@ -392,7 +397,8 @@ final class CustomFilterGenerator {
         ResultHandle runtimeResourceHandle = GeneratorUtils.runtimeResourceHandle(filterMethod, rrReqCtxHandle);
         AssignableResultHandle resourceInfo = filterMethod.createVariable(SimpleResourceInfo.class);
         BranchResult ifNullBranch = filterMethod.ifNull(runtimeResourceHandle);
-        ifNullBranch.trueBranch().assign(resourceInfo, ifNullBranch.trueBranch().loadNull());
+        ifNullBranch.trueBranch().assign(resourceInfo, ifNullBranch.trueBranch().readStaticField(
+                FieldDescriptor.of(SimpleResourceInfo.NullValues.class, "INSTANCE", SimpleResourceInfo.NullValues.class)));
         ifNullBranch.falseBranch().assign(resourceInfo, ifNullBranch.falseBranch().invokeVirtualMethod(
                 ofMethod(RuntimeResource.class, "getSimplifiedResourceInfo", SimpleResourceInfo.class),
                 runtimeResourceHandle));

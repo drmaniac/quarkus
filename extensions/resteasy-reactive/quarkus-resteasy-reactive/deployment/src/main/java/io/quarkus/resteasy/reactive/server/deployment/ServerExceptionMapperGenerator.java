@@ -25,6 +25,7 @@ import java.util.function.BiFunction;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import javax.ws.rs.container.ResourceInfo;
 import javax.ws.rs.core.Response;
 
 import org.jboss.jandex.AnnotationValue;
@@ -45,6 +46,8 @@ import org.jboss.resteasy.reactive.server.spi.ResteasyReactiveResourceInfo;
 import org.jboss.resteasy.reactive.server.spi.ServerRequestContext;
 
 import io.quarkus.arc.Unremovable;
+import io.quarkus.gizmo.AssignableResultHandle;
+import io.quarkus.gizmo.BranchResult;
 import io.quarkus.gizmo.ClassCreator;
 import io.quarkus.gizmo.ClassOutput;
 import io.quarkus.gizmo.FieldDescriptor;
@@ -54,6 +57,7 @@ import io.quarkus.gizmo.ResultHandle;
 import io.quarkus.resteasy.reactive.server.runtime.exceptionmappers.AsyncExceptionMappingUtil;
 import io.smallrye.mutiny.Uni;
 import io.vertx.core.http.HttpServerRequest;
+import io.vertx.core.http.HttpServerResponse;
 import io.vertx.ext.web.RoutingContext;
 
 final class ServerExceptionMapperGenerator {
@@ -476,16 +480,30 @@ final class ServerExceptionMapperGenerator {
                 ResultHandle routingContextHandle = routingContextHandler(mc, contextHandle);
                 targetMethodParamHandles[i] = mc.invokeInterfaceMethod(
                         ofMethod(RoutingContext.class, "request", HttpServerRequest.class), routingContextHandle);
+            } else if (HTTP_SERVER_RESPONSE.equals(paramDotName)) {
+                ResultHandle routingContextHandle = routingContextHandler(mc, contextHandle);
+                targetMethodParamHandles[i] = mc.invokeInterfaceMethod(
+                        ofMethod(RoutingContext.class, "response", HttpServerResponse.class), routingContextHandle);
             } else if (RESOURCE_INFO.equals(paramDotName)) {
                 ResultHandle runtimeResourceHandle = runtimeResourceHandle(mc, contextHandle);
-                targetMethodParamHandles[i] = mc.invokeVirtualMethod(
+                AssignableResultHandle resourceInfo = mc.createVariable(ResourceInfo.class);
+                BranchResult ifNullBranch = mc.ifNull(runtimeResourceHandle);
+                ifNullBranch.trueBranch().assign(resourceInfo, ifNullBranch.trueBranch().readStaticField(FieldDescriptor
+                        .of(SimpleResourceInfo.NullValues.class, "INSTANCE", SimpleResourceInfo.NullValues.class)));
+                ifNullBranch.falseBranch().assign(resourceInfo, ifNullBranch.falseBranch().invokeVirtualMethod(
                         ofMethod(RuntimeResource.class, "getLazyMethod", ResteasyReactiveResourceInfo.class),
-                        runtimeResourceHandle);
+                        runtimeResourceHandle));
+                targetMethodParamHandles[i] = resourceInfo;
             } else if (SIMPLIFIED_RESOURCE_INFO.equals(paramDotName)) {
                 ResultHandle runtimeResourceHandle = runtimeResourceHandle(mc, contextHandle);
-                targetMethodParamHandles[i] = mc.invokeVirtualMethod(
+                AssignableResultHandle resourceInfo = mc.createVariable(SimpleResourceInfo.class);
+                BranchResult ifNullBranch = mc.ifNull(runtimeResourceHandle);
+                ifNullBranch.trueBranch().assign(resourceInfo, ifNullBranch.trueBranch().readStaticField(FieldDescriptor
+                        .of(SimpleResourceInfo.NullValues.class, "INSTANCE", SimpleResourceInfo.NullValues.class)));
+                ifNullBranch.falseBranch().assign(resourceInfo, ifNullBranch.falseBranch().invokeVirtualMethod(
                         ofMethod(RuntimeResource.class, "getSimplifiedResourceInfo", SimpleResourceInfo.class),
-                        runtimeResourceHandle);
+                        runtimeResourceHandle));
+                targetMethodParamHandles[i] = resourceInfo;
             } else if (ROUTING_CONTEXT.equals(paramDotName)) {
                 targetMethodParamHandles[i] = routingContextHandler(mc, contextHandle);
             } else {

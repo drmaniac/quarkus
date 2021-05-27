@@ -11,9 +11,10 @@ import io.smallrye.graphql.schema.helper.TypeAutoNameStrategy;
 public class SmallRyeGraphQLConfig {
 
     /**
-     * The rootPath under which queries will be served. Default to /graphql
+     * The rootPath under which queries will be served. Default to graphql
+     * By default, this value will be resolved as a path relative to `${quarkus.http.root-path}`.
      */
-    @ConfigItem(defaultValue = "/graphql")
+    @ConfigItem(defaultValue = "graphql")
     String rootPath;
 
     /**
@@ -39,6 +40,18 @@ public class SmallRyeGraphQLConfig {
      */
     @ConfigItem(name = "events.enabled", defaultValue = "false")
     boolean eventsEnabled;
+
+    /**
+     * Enable GET Requests. Allow queries via HTTP GET.
+     */
+    @ConfigItem(name = "http.get.enabled")
+    Optional<Boolean> httpGetEnabled;
+
+    /**
+     * Enable Query parameter on POST Requests. Allow POST request to override or supply values in a query parameter.
+     */
+    @ConfigItem(name = "http.post.queryparameters.enabled")
+    Optional<Boolean> httpPostQueryParametersEnabled;
 
     /**
      * Change the type naming strategy.

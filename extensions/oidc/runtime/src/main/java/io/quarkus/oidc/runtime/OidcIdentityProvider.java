@@ -87,10 +87,13 @@ public class OidcIdentityProvider implements IdentityProvider<TokenAuthenticatio
 
         Uni<TokenVerificationResult> codeAccessTokenUni = verifyCodeFlowAccessTokenUni(vertxContext, request, resolvedContext);
 
-        return codeAccessTokenUni.onItem().transformToUni(
-                new Function<TokenVerificationResult, Uni<? extends SecurityIdentity>>() {
+        return codeAccessTokenUni.onItemOrFailure().transformToUni(
+                new BiFunction<TokenVerificationResult, Throwable, Uni<? extends SecurityIdentity>>() {
                     @Override
-                    public Uni<SecurityIdentity> apply(TokenVerificationResult codeAccessToken) {
+                    public Uni<SecurityIdentity> apply(TokenVerificationResult codeAccessToken, Throwable t) {
+                        if (t != null) {
+                            return Uni.createFrom().failure(new AuthenticationFailedException(t));
+                        }
                         return validateTokenWithOidcServer(vertxContext, request, resolvedContext, codeAccessToken);
                     }
                 });
@@ -146,8 +149,7 @@ public class OidcIdentityProvider implements IdentityProvider<TokenAuthenticatio
                                 JsonObject rolesJson = getRolesJson(vertxContext, resolvedContext, tokenCred, tokenJson,
                                         userInfo);
                                 SecurityIdentity securityIdentity = validateAndCreateIdentity(vertxContext, tokenCred,
-                                        resolvedContext.oidcConfig,
-                                        tokenJson, rolesJson, userInfo);
+                                        resolvedContext, tokenJson, rolesJson, userInfo);
                                 if (tokenAutoRefreshPrepared(tokenJson, vertxContext, resolvedContext.oidcConfig)) {
                                     return Uni.createFrom().failure(new TokenAutoRefreshException(securityIdentity));
                                 } else {
@@ -166,19 +168,22 @@ public class OidcIdentityProvider implements IdentityProvider<TokenAuthenticatio
                             QuarkusSecurityIdentity.Builder builder = QuarkusSecurityIdentity.builder();
                             builder.addCredential(tokenCred);
                             OidcUtils.setSecurityIdentityUserInfo(builder, userInfo);
-
-                            // getRolesJson: make sure the introspection is picked up correctly
-                            // OidcRuntimeClient.verifyCodeToken - set the introspection there - which may be ambiguous
+                            OidcUtils.setSecurityIdentityConfigMetadata(builder, resolvedContext);
+                            String principalMember = "";
                             if (result.introspectionResult.containsKey(OidcConstants.INTROSPECTION_TOKEN_USERNAME)) {
-                                final String userName = result.introspectionResult
-                                        .getString(OidcConstants.INTROSPECTION_TOKEN_USERNAME);
-                                builder.setPrincipal(new Principal() {
-                                    @Override
-                                    public String getName() {
-                                        return userName;
-                                    }
-                                });
+                                principalMember = OidcConstants.INTROSPECTION_TOKEN_USERNAME;
+                            } else if (result.introspectionResult.containsKey(OidcConstants.INTROSPECTION_TOKEN_SUB)) {
+                                // fallback to "sub", if "username" is not present
+                                principalMember = OidcConstants.INTROSPECTION_TOKEN_SUB;
                             }
+                            final String userName = principalMember.isEmpty() ? ""
+                                    : result.introspectionResult.getString(principalMember);
+                            builder.setPrincipal(new Principal() {
+                                @Override
+                                public String getName() {
+                                    return userName;
+                                }
+                            });
                             if (result.introspectionResult.containsKey(OidcConstants.TOKEN_SCOPE)) {
                                 for (String role : result.introspectionResult.getString(OidcConstants.TOKEN_SCOPE).split(" ")) {
                                     builder.addRole(role.trim());
@@ -247,9 +252,16 @@ public class OidcIdentityProvider implements IdentityProvider<TokenAuthenticatio
     }
 
     private Uni<TokenVerificationResult> verifyTokenUni(TenantConfigContext resolvedContext, String token) {
-        if (OidcUtils.isOpaqueToken(token) || resolvedContext.provider.getMetadata().getJsonWebKeySetUri() == null) {
+        if (OidcUtils.isOpaqueToken(token)) {
+            if (!resolvedContext.oidcConfig.token.allowOpaqueTokenIntrospection) {
+                throw new AuthenticationFailedException();
+            }
+            return introspectTokenUni(resolvedContext, token);
+        } else if (resolvedContext.provider.getMetadata().getJsonWebKeySetUri() == null) {
+            // Verify JWT token with the remote introspection
             return introspectTokenUni(resolvedContext, token);
         } else {
+            // Verify JWT token with the local JWK keys with a possible remote introspection fallback
             try {
                 return Uni.createFrom().item(resolvedContext.provider.verifyJwtToken(token));
             } catch (Throwable t) {
@@ -286,7 +298,7 @@ public class OidcIdentityProvider implements IdentityProvider<TokenAuthenticatio
         try {
             TokenVerificationResult result = resolvedContext.provider.verifyJwtToken(request.getToken().getToken());
             return Uni.createFrom()
-                    .item(validateAndCreateIdentity(null, request.getToken(), resolvedContext.oidcConfig,
+                    .item(validateAndCreateIdentity(null, request.getToken(), resolvedContext,
                             result.localVerificationResult, result.localVerificationResult, null));
         } catch (Throwable t) {
             return Uni.createFrom().failure(new AuthenticationFailedException(t));

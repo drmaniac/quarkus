@@ -7,11 +7,11 @@ import java.util.Properties;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 
-import io.quarkus.devtools.test.RegistryClientTestHelper;
+import io.quarkus.devtools.testing.RegistryClientTestHelper;
 
 public class QuarkusGradleDevToolsTestBase extends QuarkusGradleWrapperTestBase {
 
-    private static Properties devToolsProps = new Properties(2);
+    private static Properties devToolsProps = new Properties();
 
     @BeforeAll
     static void enableDevToolsTestConfig() {

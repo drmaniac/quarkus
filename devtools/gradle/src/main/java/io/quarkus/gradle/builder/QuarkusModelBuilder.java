@@ -1,20 +1,17 @@
 package io.quarkus.gradle.builder;
 
-import static io.quarkus.bootstrap.resolver.model.impl.ArtifactCoordsImpl.TYPE_JAR;
-
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -46,19 +43,21 @@ import org.gradle.api.tasks.SourceSet;
 import org.gradle.tooling.provider.model.ParameterizedToolingModelBuilder;
 
 import io.quarkus.bootstrap.BootstrapConstants;
-import io.quarkus.bootstrap.model.AppArtifactKey;
-import io.quarkus.bootstrap.resolver.model.ArtifactCoords;
-import io.quarkus.bootstrap.resolver.model.Dependency;
-import io.quarkus.bootstrap.resolver.model.ModelParameter;
-import io.quarkus.bootstrap.resolver.model.QuarkusModel;
-import io.quarkus.bootstrap.resolver.model.WorkspaceModule;
-import io.quarkus.bootstrap.resolver.model.impl.ArtifactCoordsImpl;
-import io.quarkus.bootstrap.resolver.model.impl.DependencyImpl;
-import io.quarkus.bootstrap.resolver.model.impl.ModelParameterImpl;
-import io.quarkus.bootstrap.resolver.model.impl.QuarkusModelImpl;
-import io.quarkus.bootstrap.resolver.model.impl.SourceSetImpl;
-import io.quarkus.bootstrap.resolver.model.impl.WorkspaceImpl;
-import io.quarkus.bootstrap.resolver.model.impl.WorkspaceModuleImpl;
+import io.quarkus.bootstrap.model.PlatformImports;
+import io.quarkus.bootstrap.model.PlatformImportsImpl;
+import io.quarkus.bootstrap.model.gradle.ArtifactCoords;
+import io.quarkus.bootstrap.model.gradle.Dependency;
+import io.quarkus.bootstrap.model.gradle.ModelParameter;
+import io.quarkus.bootstrap.model.gradle.QuarkusModel;
+import io.quarkus.bootstrap.model.gradle.WorkspaceModule;
+import io.quarkus.bootstrap.model.gradle.impl.ArtifactCoordsImpl;
+import io.quarkus.bootstrap.model.gradle.impl.DependencyImpl;
+import io.quarkus.bootstrap.model.gradle.impl.ModelParameterImpl;
+import io.quarkus.bootstrap.model.gradle.impl.QuarkusModelImpl;
+import io.quarkus.bootstrap.model.gradle.impl.SourceSetImpl;
+import io.quarkus.bootstrap.model.gradle.impl.WorkspaceImpl;
+import io.quarkus.bootstrap.model.gradle.impl.WorkspaceModuleImpl;
+import io.quarkus.bootstrap.resolver.AppModelResolverException;
 import io.quarkus.bootstrap.util.QuarkusModelHelper;
 import io.quarkus.gradle.QuarkusPlugin;
 import io.quarkus.gradle.tasks.QuarkusGradleUtils;
@@ -67,6 +66,7 @@ import io.quarkus.runtime.util.HashUtil;
 
 public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<ModelParameter> {
 
+    private static final String QUARKUS_DEPLOYMENT_ONLY_CLASSPATH = "quarkusDeploymentOnlyClasspath";
     private static final String MAIN_RESOURCES_OUTPUT = "build/resources/main";
     private static final String CLASSES_OUTPUT = "build/classes";
 
@@ -103,7 +103,7 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
 
         final List<org.gradle.api.artifacts.Dependency> deploymentDeps = getEnforcedPlatforms(project);
 
-        final Map<String, String> platformProperties = resolvePlatformProperties(project, deploymentDeps);
+        final PlatformImports platformImports = resolvePlatformImports(project, deploymentDeps);
 
         final Map<ArtifactCoords, Dependency> appDependencies = new LinkedHashMap<>();
         final Set<ArtifactCoords> visitedDeps = new HashSet<>();
@@ -119,28 +119,25 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
                 project.getVersion().toString());
 
         return new QuarkusModelImpl(
-                new WorkspaceImpl(appArtifactCoords, getWorkspace(project.getRootProject(), mode)),
+                new WorkspaceImpl(appArtifactCoords, getWorkspace(project.getRootProject(), mode, appArtifactCoords)),
                 new LinkedList<>(appDependencies.values()),
                 extensionDependencies,
                 deploymentDeps.stream().map(QuarkusModelBuilder::toEnforcedPlatformDependency)
                         .filter(Objects::nonNull).collect(Collectors.toList()),
-                platformProperties);
+                platformImports);
     }
 
-    private Map<String, String> resolvePlatformProperties(Project project,
+    private PlatformImports resolvePlatformImports(Project project,
             List<org.gradle.api.artifacts.Dependency> deploymentDeps) {
         final Configuration boms = project.getConfigurations()
                 .detachedConfiguration(deploymentDeps.toArray(new org.gradle.api.artifacts.Dependency[0]));
-        final Map<String, String> platformProps = new HashMap<>();
-        final Set<AppArtifactKey> descriptorKeys = new HashSet<>(4);
-        final Set<AppArtifactKey> propertyKeys = new HashSet<>(2);
+        final PlatformImportsImpl platformImports = new PlatformImportsImpl();
         boms.getResolutionStrategy().eachDependency(d -> {
             final String group = d.getTarget().getGroup();
             final String name = d.getTarget().getName();
             if (name.endsWith(BootstrapConstants.PLATFORM_DESCRIPTOR_ARTIFACT_ID_SUFFIX)) {
-                descriptorKeys.add(new AppArtifactKey(group,
-                        name.substring(0, name.length() - BootstrapConstants.PLATFORM_DESCRIPTOR_ARTIFACT_ID_SUFFIX.length()),
-                        d.getTarget().getVersion()));
+                platformImports.addPlatformDescriptor(group, name, d.getTarget().getVersion(), "json",
+                        d.getTarget().getVersion());
             } else if (name.endsWith(BootstrapConstants.PLATFORM_PROPERTIES_ARTIFACT_ID_SUFFIX)) {
                 final DefaultDependencyArtifact dep = new DefaultDependencyArtifact();
                 dep.setExtension("properties");
@@ -154,47 +151,23 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
                 for (ResolvedArtifact a : project.getConfigurations().detachedConfiguration(gradleDep)
                         .getResolvedConfiguration().getResolvedArtifacts()) {
                     if (a.getName().equals(name)) {
-                        final Properties props = new Properties();
-                        try (InputStream is = new FileInputStream(a.getFile())) {
-                            props.load(is);
-                        } catch (IOException e) {
-                            throw new GradleException("Failed to read properties from " + a.getFile(), e);
-                        }
-                        for (Map.Entry<?, ?> prop : props.entrySet()) {
-                            final String propName = String.valueOf(prop.getKey());
-                            if (propName.startsWith(BootstrapConstants.PLATFORM_PROPERTY_PREFIX)) {
-                                platformProps.put(propName, String.valueOf(prop.getValue()));
-                            }
+                        try {
+                            platformImports.addPlatformProperties(group, name, null, "properties", d.getTarget().getVersion(),
+                                    a.getFile().toPath());
+                        } catch (AppModelResolverException e) {
+                            throw new GradleException("Failed to import platform properties " + a.getFile(), e);
                         }
                         break;
                     }
                 }
-                propertyKeys.add(new AppArtifactKey(group,
-                        name.substring(0, name.length() - BootstrapConstants.PLATFORM_PROPERTIES_ARTIFACT_ID_SUFFIX.length()),
-                        d.getTarget().getVersion()));
             }
 
         });
         boms.getResolvedConfiguration();
-        if (!descriptorKeys.containsAll(propertyKeys)) {
-            final StringBuilder buf = new StringBuilder();
-            buf.append(
-                    "The Quarkus platform properties applied to the project are missing the corresponding Quarkus platform BOM imports:");
-            final int l = buf.length();
-            for (AppArtifactKey key : propertyKeys) {
-                if (!descriptorKeys.contains(key)) {
-                    if (l - buf.length() < 0) {
-                        buf.append(',');
-                    }
-                    buf.append(' ').append(key);
-                }
-            }
-            throw new GradleException(buf.toString());
-        }
-        return platformProps;
+        return platformImports;
     }
 
-    public Set<WorkspaceModule> getWorkspace(Project project, LaunchMode mode) {
+    public Set<WorkspaceModule> getWorkspace(Project project, LaunchMode mode, ArtifactCoords mainModuleCoord) {
         Set<WorkspaceModule> modules = new HashSet<>();
         for (Project subproject : project.getAllprojects()) {
             final Convention convention = subproject.getConvention();
@@ -202,17 +175,30 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
             if (javaConvention == null || !javaConvention.getSourceSets().getNames().contains(SourceSet.MAIN_SOURCE_SET_NAME)) {
                 continue;
             }
-            modules.add(getWorkspaceModule(subproject, mode));
+            if (subproject.getName().equals(mainModuleCoord.getArtifactId())
+                    && subproject.getGroup().equals(mainModuleCoord.getGroupId())) {
+                modules.add(getWorkspaceModule(subproject, mode, true));
+            } else {
+                modules.add(getWorkspaceModule(subproject, mode, false));
+            }
+
         }
         return modules;
     }
 
-    private WorkspaceModule getWorkspaceModule(Project project, LaunchMode mode) {
+    private WorkspaceModule getWorkspaceModule(Project project, LaunchMode mode, boolean isMainModule) {
         ArtifactCoords appArtifactCoords = new ArtifactCoordsImpl(project.getGroup().toString(), project.getName(),
                 project.getVersion().toString());
         final SourceSet mainSourceSet = QuarkusGradleUtils.getSourceSet(project, SourceSet.MAIN_SOURCE_SET_NAME);
-        final SourceSetImpl modelSourceSet = convert(mainSourceSet);
-        return new WorkspaceModuleImpl(appArtifactCoords, project.getProjectDir().getAbsoluteFile(),
+        final SourceSetImpl modelSourceSet;
+        if (isMainModule && mode == LaunchMode.TEST) {
+            final SourceSet testSourceSet = QuarkusGradleUtils.getSourceSet(project, SourceSet.TEST_SOURCE_SET_NAME);
+            modelSourceSet = convert(mainSourceSet, testSourceSet.getOutput().getClassesDirs().getFiles());
+        } else {
+            modelSourceSet = convert(mainSourceSet, Collections.emptySet());
+        }
+        return new WorkspaceModuleImpl(appArtifactCoords,
+                project.getProjectDir().getAbsoluteFile(),
                 project.getBuildDir().getAbsoluteFile(), getSourceSourceSet(mainSourceSet), modelSourceSet);
     }
 
@@ -306,8 +292,13 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
             Collection<org.gradle.api.artifacts.Dependency> extensions) {
         final List<Dependency> platformDependencies = new LinkedList<>();
 
-        final Configuration deploymentConfig = project.getConfigurations()
-                .detachedConfiguration(extensions.toArray(new org.gradle.api.artifacts.Dependency[0]));
+        Configuration deploymentConfig = project.getConfigurations().findByName(QUARKUS_DEPLOYMENT_ONLY_CLASSPATH);
+        if (deploymentConfig == null) {
+            deploymentConfig = project.getConfigurations().create(QUARKUS_DEPLOYMENT_ONLY_CLASSPATH)
+                    .defaultDependencies(a -> {
+                        a.addAll(extensions);
+                    });
+        }
         final ResolvedConfiguration rc = deploymentConfig.getResolvedConfiguration();
         for (ResolvedArtifact a : rc.getResolvedArtifacts()) {
             if (!isDependency(a)) {
@@ -337,15 +328,25 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
                 continue;
             }
             final DependencyImpl dep = initDependency(a);
-            if (LaunchMode.DEVELOPMENT.equals(mode) &&
+            if ((LaunchMode.DEVELOPMENT.equals(mode) || LaunchMode.TEST.equals(mode)) &&
                     a.getId().getComponentIdentifier() instanceof ProjectComponentIdentifier) {
-                IncludedBuild includedBuild = includedBuild(project, a.getName());
-                if (includedBuild != null) {
-                    addSubstitutedProject(dep, includedBuild.getProjectDir());
+                if ("test-fixtures".equals(a.getClassifier()) || "test".equals(a.getClassifier())) {
+                    //TODO: test-fixtures are broken under the new ClassLoading model
+                    dep.addPath(a.getFile());
                 } else {
-                    Project projectDep = project.getRootProject()
-                            .findProject(((ProjectComponentIdentifier) a.getId().getComponentIdentifier()).getProjectPath());
-                    addDevModePaths(dep, a, projectDep);
+                    IncludedBuild includedBuild = includedBuild(project.getRootProject(), a.getName());
+                    if (includedBuild != null) {
+                        addSubstitutedProject(dep, includedBuild.getProjectDir());
+                    } else {
+                        Project projectDep = project.getRootProject()
+                                .findProject(
+                                        ((ProjectComponentIdentifier) a.getId().getComponentIdentifier()).getProjectPath());
+                        if (projectDep != null) {
+                            addDevModePaths(dep, a, projectDep);
+                        } else {
+                            dep.addPath(a.getFile());
+                        }
+                    }
                 }
             } else {
                 dep.addPath(a.getFile());
@@ -397,10 +398,16 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
             dep.addPath(a.getFile());
             return;
         }
-
-        final File classesDir = new File(QuarkusGradleUtils.getClassesDir(mainSourceSet, project.getBuildDir(), false));
-        if (classesDir.exists()) {
-            dep.addPath(classesDir);
+        final String classes = QuarkusGradleUtils.getClassesDir(mainSourceSet, project.getBuildDir(), false);
+        if (classes == null) {
+            dep.addPath(a.getFile());
+        } else {
+            final File classesDir = new File(classes);
+            if (classesDir.exists()) {
+                dep.addPath(classesDir);
+            } else {
+                dep.addPath(a.getFile());
+            }
         }
         for (File resourcesDir : mainSourceSet.getResources().getSourceDirectories()) {
             if (resourcesDir.exists()) {
@@ -445,19 +452,25 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
         }
     }
 
-    private SourceSetImpl convert(SourceSet sourceSet) {
+    private SourceSetImpl convert(SourceSet sourceSet, Set<File> additionalSourceDirs) {
+        final Set<File> existingSrcDirs = new LinkedHashSet<>();
+        for (File srcDir : sourceSet.getOutput().getClassesDirs().getFiles()) {
+            if (srcDir.exists()) {
+                existingSrcDirs.add(srcDir);
+            }
+        }
+        existingSrcDirs.addAll(additionalSourceDirs);
         if (sourceSet.getOutput().getResourcesDir().exists()) {
             return new SourceSetImpl(
-                    sourceSet.getOutput().getClassesDirs().getFiles(),
-                    sourceSet.getOutput().getResourcesDir());
+                    existingSrcDirs,
+                    Collections.singleton(sourceSet.getOutput().getResourcesDir()));
         }
-        return new SourceSetImpl(
-                sourceSet.getOutput().getClassesDirs().getFiles());
+        return new SourceSetImpl(existingSrcDirs);
     }
 
-    private io.quarkus.bootstrap.resolver.model.SourceSet getSourceSourceSet(SourceSet sourceSet) {
+    private io.quarkus.bootstrap.model.gradle.SourceSet getSourceSourceSet(SourceSet sourceSet) {
         return new SourceSetImpl(sourceSet.getAllJava().getSrcDirs(),
-                sourceSet.getResources().getSourceDirectories().getSingleFile());
+                sourceSet.getResources().getSourceDirectories().getFiles());
     }
 
     private static boolean isDependency(ResolvedArtifact a) {
@@ -498,6 +511,6 @@ public class QuarkusModelBuilder implements ParameterizedToolingModelBuilder<Mod
     private static ArtifactCoords toAppDependenciesKey(String groupId, String artifactId, String classifier) {
         // Default classifier is empty string and not null value, lets keep it that way
         classifier = classifier == null ? "" : classifier;
-        return new ArtifactCoordsImpl(groupId, artifactId, classifier, "", TYPE_JAR);
+        return new ArtifactCoordsImpl(groupId, artifactId, classifier, "", ArtifactCoordsImpl.TYPE_JAR);
     }
 }
